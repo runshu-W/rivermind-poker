@@ -24,6 +24,8 @@ class CoachRuntimeStatus(StrEnum):
     VALIDATED = "validated"
     TIMEOUT = "timeout"
     PROVIDER_ERROR = "provider_error"
+    PROVIDER_REFUSAL = "provider_refusal"
+    PROVIDER_INCOMPLETE = "provider_incomplete"
     INVALID_CANDIDATE = "invalid_candidate"
     BUDGET_BLOCKED = "budget_blocked"
     BUDGET_EXCEEDED = "budget_exceeded"
@@ -38,6 +40,22 @@ class CoachProviderResponse:
     output_tokens: int = 0
     cost_microusd: int = 0
     request_id: str | None = None
+
+
+class CoachProviderRefusal(RuntimeError):
+    """Raised when a provider returns a model refusal without retaining its text."""
+
+    def __init__(self, usage: CoachProviderResponse | None = None) -> None:
+        super().__init__()
+        self.usage = usage
+
+
+class CoachProviderIncomplete(RuntimeError):
+    """Raised when a provider cannot produce a complete structured candidate."""
+
+    def __init__(self, usage: CoachProviderResponse | None = None) -> None:
+        super().__init__()
+        self.usage = usage
 
 
 class CoachProvider(Protocol):
@@ -86,6 +104,8 @@ class CoachCallAudit:
     status: CoachRuntimeStatus
     provider_id: str
     model_id: str
+    prompt_version: str
+    prompt_hash: str
     evidence_id: str
     evidence_hash: str
     attempts: int
@@ -121,6 +141,8 @@ async def run_coach_provider(
     started_clock = time.perf_counter()
     provider_id = _provider_label(provider, "provider_id")
     model_id = _provider_label(provider, "model_id")
+    prompt_version = _provider_label(provider, "prompt_version")
+    prompt_hash = _provider_label(provider, "prompt_hash")
 
     if input_chars > policy.max_input_chars:
         issue = ValidationIssue(
@@ -134,6 +156,8 @@ async def run_coach_provider(
             status=CoachRuntimeStatus.INPUT_TOO_LARGE,
             provider_id=provider_id,
             model_id=model_id,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
             attempts=0,
             input_chars=input_chars,
             started_at=started_at,
@@ -159,6 +183,8 @@ async def run_coach_provider(
             status=CoachRuntimeStatus.PROVIDER_ERROR,
             provider_id=provider_id,
             model_id=model_id,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
             attempts=0,
             input_chars=input_chars,
             started_at=started_at,
@@ -177,6 +203,8 @@ async def run_coach_provider(
             status=CoachRuntimeStatus.BUDGET_BLOCKED,
             provider_id=provider_id,
             model_id=model_id,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
             attempts=0,
             input_chars=input_chars,
             started_at=started_at,
@@ -184,6 +212,7 @@ async def run_coach_provider(
         )
 
     last_status = CoachRuntimeStatus.PROVIDER_ERROR
+    outcome_usage: CoachProviderResponse | None = None
     attempts = 0
     for attempts in range(1, policy.max_attempts + 1):
         try:
@@ -195,6 +224,14 @@ async def run_coach_provider(
                 ),
                 timeout=policy.timeout_seconds,
             )
+        except CoachProviderRefusal as exc:
+            last_status = CoachRuntimeStatus.PROVIDER_REFUSAL
+            outcome_usage = exc.usage
+            break
+        except CoachProviderIncomplete as exc:
+            last_status = CoachRuntimeStatus.PROVIDER_INCOMPLETE
+            outcome_usage = exc.usage
+            break
         except TimeoutError:
             last_status = CoachRuntimeStatus.TIMEOUT
             continue
@@ -214,6 +251,8 @@ async def run_coach_provider(
                 status=CoachRuntimeStatus.PROVIDER_ERROR,
                 provider_id=provider_id,
                 model_id=model_id,
+                prompt_version=prompt_version,
+                prompt_hash=prompt_hash,
                 attempts=attempts,
                 input_chars=input_chars,
                 started_at=started_at,
@@ -228,6 +267,8 @@ async def run_coach_provider(
                 status=CoachRuntimeStatus.PROVIDER_ERROR,
                 provider_id=provider_id,
                 model_id=model_id,
+                prompt_version=prompt_version,
+                prompt_hash=prompt_hash,
                 attempts=attempts,
                 input_chars=input_chars,
                 started_at=started_at,
@@ -246,6 +287,8 @@ async def run_coach_provider(
                 status=CoachRuntimeStatus.PROVIDER_ERROR,
                 provider_id=provider_id,
                 model_id=model_id,
+                prompt_version=prompt_version,
+                prompt_hash=prompt_hash,
                 attempts=attempts,
                 input_chars=input_chars,
                 response=response,
@@ -267,6 +310,8 @@ async def run_coach_provider(
                 status=CoachRuntimeStatus.PROVIDER_ERROR,
                 provider_id=provider_id,
                 model_id=model_id,
+                prompt_version=prompt_version,
+                prompt_hash=prompt_hash,
                 attempts=attempts,
                 input_chars=input_chars,
                 started_at=started_at,
@@ -285,6 +330,8 @@ async def run_coach_provider(
                 status=CoachRuntimeStatus.OUTPUT_TOO_LARGE,
                 provider_id=provider_id,
                 model_id=model_id,
+                prompt_version=prompt_version,
+                prompt_hash=prompt_hash,
                 attempts=attempts,
                 input_chars=input_chars,
                 output_chars=output_chars,
@@ -305,6 +352,8 @@ async def run_coach_provider(
                 status=CoachRuntimeStatus.BUDGET_EXCEEDED,
                 provider_id=provider_id,
                 model_id=model_id,
+                prompt_version=prompt_version,
+                prompt_hash=prompt_hash,
                 attempts=attempts,
                 input_chars=input_chars,
                 output_chars=output_chars,
@@ -324,6 +373,8 @@ async def run_coach_provider(
             status=status,
             provider_id=provider_id,
             model_id=model_id,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
             attempts=attempts,
             input_chars=input_chars,
             output_chars=output_chars,
@@ -332,11 +383,11 @@ async def run_coach_provider(
             started_clock=started_clock,
         )
 
-    issue_code = (
-        "runtime_timeout"
-        if last_status == CoachRuntimeStatus.TIMEOUT
-        else "runtime_provider_error"
-    )
+    issue_code = {
+        CoachRuntimeStatus.TIMEOUT: "runtime_timeout",
+        CoachRuntimeStatus.PROVIDER_REFUSAL: "runtime_provider_refusal",
+        CoachRuntimeStatus.PROVIDER_INCOMPLETE: "runtime_provider_incomplete",
+    }.get(last_status, "runtime_provider_error")
     issue = ValidationIssue(
         issue_code,
         "provider",
@@ -348,8 +399,11 @@ async def run_coach_provider(
         status=last_status,
         provider_id=provider_id,
         model_id=model_id,
+        prompt_version=prompt_version,
+        prompt_hash=prompt_hash,
         attempts=attempts,
         input_chars=input_chars,
+        response=outcome_usage,
         started_at=started_at,
         started_clock=started_clock,
     )
@@ -362,6 +416,8 @@ def coach_call_audit_to_dict(audit: CoachCallAudit) -> dict[str, object]:
         "status": audit.status.value,
         "provider_id": audit.provider_id,
         "model_id": audit.model_id,
+        "prompt_version": audit.prompt_version,
+        "prompt_hash": audit.prompt_hash,
         "evidence_id": audit.evidence_id,
         "evidence_hash": audit.evidence_hash,
         "attempts": audit.attempts,
@@ -384,6 +440,8 @@ def _result(
     status: CoachRuntimeStatus,
     provider_id: str,
     model_id: str,
+    prompt_version: str,
+    prompt_hash: str,
     attempts: int,
     input_chars: int,
     started_at: datetime,
@@ -400,6 +458,8 @@ def _result(
         status=status,
         provider_id=provider_id,
         model_id=model_id,
+        prompt_version=prompt_version,
+        prompt_hash=prompt_hash,
         evidence_id=item.evidence.evidence_id,
         evidence_hash=item.evidence.evidence_hash,
         attempts=attempts,

@@ -517,12 +517,16 @@ def coach_report_to_dict(report: CoachReport) -> dict[str, object]:
             "fallbacks": report.fallback_count,
         },
         "items": [
-            {
-                "model_input": item.evidence.model_payload(),
-                "explanation": _explanation_to_dict(item.explanation),
-            }
+            coach_item_to_dict(item)
             for item in report.items
         ],
+    }
+
+
+def coach_item_to_dict(item: CoachItem) -> dict[str, object]:
+    return {
+        "model_input": item.evidence.model_payload(),
+        "explanation": _explanation_to_dict(item.explanation),
     }
 
 

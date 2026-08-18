@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
 from typing import Sequence
 
 from rivermind_core.coach import (
     CoachReport,
+    CoachSource,
+    coach_item_to_dict,
     coach_report_to_dict,
     explain_leak_report,
 )
@@ -17,10 +20,25 @@ from rivermind_core.coach_evals import (
     coach_eval_report_to_dict,
     run_coach_eval,
 )
+from rivermind_core.coach_review import (
+    build_blind_review_case,
+    build_expert_review_document,
+    expert_review_report_to_dict,
+    load_and_score_expert_reviews,
+)
+from rivermind_core.coach_runtime import (
+    CoachRuntimePolicy,
+    coach_call_audit_to_dict,
+    run_coach_provider,
+)
 from rivermind_core.html_report import render_analysis_page
 from rivermind_core.importer import HandHistoryImporter, ImportBatchReport
 from rivermind_core.leaks import LeakAssessment, LeakReport, LeakStatus
 from rivermind_core.models import GameType, PlayerPosition
+from rivermind_core.openai_provider import (
+    OpenAIResponsesCoachProvider,
+    OpenAIResponsesConfig,
+)
 from rivermind_core.parsers import default_registry
 from rivermind_core.replay import HandReplay
 from rivermind_core.reports import HandQuery, PlayerHandReport, StatMetric
@@ -78,6 +96,43 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("evals/coach_candidate_cases.json"),
     )
     coach_eval_parser.add_argument("--json", action="store_true")
+
+    coach_openai_parser = subparsers.add_parser(
+        "coach-openai",
+        help="Explain exactly one leak card through the opt-in OpenAI adapter",
+    )
+    _add_database_argument(coach_openai_parser)
+    _add_scope_arguments(coach_openai_parser)
+    _add_dimension_arguments(coach_openai_parser)
+    coach_openai_parser.add_argument("--rule-id", required=True)
+    coach_openai_parser.add_argument("--model", required=True)
+    coach_openai_parser.add_argument(
+        "--input-usd-per-million", type=Decimal, required=True
+    )
+    coach_openai_parser.add_argument(
+        "--output-usd-per-million", type=Decimal, required=True
+    )
+    coach_openai_parser.add_argument("--evidence-limit", type=int, default=5)
+    coach_openai_parser.add_argument("--timeout-seconds", type=float, default=10.0)
+    coach_openai_parser.add_argument("--max-attempts", type=int, default=1)
+    coach_openai_parser.add_argument(
+        "--max-cost-microusd", type=int, default=50_000
+    )
+    coach_openai_parser.add_argument("--allow-external-model", action="store_true")
+    coach_openai_parser.add_argument("--review-output", type=Path)
+    coach_openai_parser.add_argument(
+        "--variant-id",
+        choices=list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+        default="A",
+    )
+    coach_openai_parser.add_argument("--json", action="store_true")
+
+    coach_review_parser = subparsers.add_parser(
+        "coach-review-score",
+        help="Score a blinded expert review document against the quality gate",
+    )
+    coach_review_parser.add_argument("path", type=Path)
+    coach_review_parser.add_argument("--json", action="store_true")
 
     sessions_parser = subparsers.add_parser(
         "sessions", help="Summarize cash sessions and tournaments"
@@ -139,6 +194,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "leaks": _run_leaks,
         "coach": _run_coach,
         "coach-eval": _run_coach_eval,
+        "coach-openai": _run_coach_openai,
+        "coach-review-score": _run_coach_review_score,
         "sessions": _run_sessions,
         "hands": _run_hands,
         "replay": _run_replay,
@@ -269,6 +326,143 @@ def _run_coach_eval(args: argparse.Namespace) -> int:
                     f"{list(item.actual_issue_codes)}"
                 )
     return 0 if report.failed == 0 else 2
+
+
+def _run_coach_openai(args: argparse.Namespace) -> int:
+    if not args.allow_external_model:
+        return _print_value_error(
+            ValueError("--allow-external-model is required before any external request")
+        )
+    if args.review_output is not None:
+        if args.review_output.exists():
+            return _print_value_error(
+                ValueError(f"review-output already exists: {args.review_output}")
+            )
+        if not args.review_output.parent.exists():
+            return _print_value_error(
+                ValueError(
+                    f"review-output parent does not exist: {args.review_output.parent}"
+                )
+            )
+    if not _database_exists(args.database):
+        return 2
+    try:
+        stat_filter = _stats_filter(args)
+        if not 1 <= args.evidence_limit <= 20:
+            raise ValueError("evidence-limit must be between 1 and 20")
+        input_rate = _usd_per_million_to_microusd(
+            args.input_usd_per_million,
+            "input-usd-per-million",
+        )
+        output_rate = _usd_per_million_to_microusd(
+            args.output_usd_per_million,
+            "output-usd-per-million",
+        )
+        config = OpenAIResponsesConfig.from_environment(
+            model_id=args.model,
+            input_rate_microusd_per_million_tokens=input_rate,
+            output_rate_microusd_per_million_tokens=output_rate,
+            external_data_consent=True,
+        )
+        provider = OpenAIResponsesCoachProvider(config)
+        policy = CoachRuntimePolicy(
+            timeout_seconds=args.timeout_seconds,
+            max_attempts=args.max_attempts,
+            max_total_cost_microusd=args.max_cost_microusd,
+        )
+    except ValueError as exc:
+        return _print_value_error(exc)
+
+    player_name, heroes_only = _scope(args)
+    with SQLiteHandStore(args.database) as store:
+        leak_report = store.query_leaks(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=stat_filter,
+            evidence_limit=args.evidence_limit,
+        )
+    matching_cards = [
+        card
+        for card in leak_report.cards
+        if card.assessment.rule_id == args.rule_id
+    ]
+    if len(matching_cards) != 1:
+        return _print_value_error(
+            ValueError(
+                f"rule-id must select exactly one leak card; matched {len(matching_cards)}"
+            )
+        )
+
+    result = asyncio.run(
+        run_coach_provider(matching_cards[0], provider, policy=policy)
+    )
+    review_written = False
+    if args.review_output is not None and (
+        result.item.explanation.source == CoachSource.LLM_VALIDATED
+    ):
+        review_document = build_expert_review_document(
+            (
+                build_blind_review_case(
+                    result.item,
+                    case_id=(
+                        f"{result.item.evidence.evidence_id}:{args.variant_id}"
+                    ),
+                    variant_id=args.variant_id,
+                ),
+            )
+        )
+        try:
+            with args.review_output.open("x", encoding="utf-8") as output_file:
+                json.dump(review_document, output_file, ensure_ascii=False, indent=2)
+                output_file.write("\n")
+            review_written = True
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "item": coach_item_to_dict(result.item),
+                    "audit": coach_call_audit_to_dict(result.audit),
+                    "review_output": (
+                        None
+                        if not review_written
+                        else str(args.review_output.resolve())
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        _print_coach(CoachReport((result.item,)))
+        print(f"Runtime: {result.audit.status.value}")
+        if review_written:
+            print(f"Blind review packet: {args.review_output.resolve()}")
+    return 0 if result.item.explanation.source == CoachSource.LLM_VALIDATED else 2
+
+
+def _run_coach_review_score(args: argparse.Namespace) -> int:
+    try:
+        report = load_and_score_expert_reviews(args.path)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(expert_review_report_to_dict(report), ensure_ascii=False))
+    else:
+        print(
+            f"Expert review gate: {'PASS' if report.passed else 'FAIL'} · "
+            f"{report.cases} cases · {report.unique_evidence_cases} unique evidence · "
+            f"{report.ratings} ratings · "
+            f"{report.fatal_errors} fatal errors"
+        )
+        for dimension, value in report.dimension_means.items():
+            print(f"- {dimension}: {value:.3f}")
+        for reason in report.failure_reasons:
+            print(f"- FAIL {reason}")
+    return 0 if report.passed else 2
 
 
 def _run_sessions(args: argparse.Namespace) -> int:
@@ -461,6 +655,15 @@ def _database_exists(path: Path) -> bool:
 def _print_value_error(error: ValueError) -> int:
     print(f"error: {error}", file=sys.stderr)
     return 2
+
+
+def _usd_per_million_to_microusd(value: Decimal, field: str) -> int:
+    if not value.is_finite() or value <= 0:
+        raise ValueError(f"{field} must be a positive finite decimal")
+    result = int((value * Decimal("1000000")).to_integral_value(ROUND_CEILING))
+    if result <= 0:
+        raise ValueError(f"{field} is too small to represent safely")
+    return result
 
 
 def _parse_datetime(value: str) -> datetime:
