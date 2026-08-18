@@ -1,4 +1,8 @@
-from .base import HandHistoryParseError, ParserRegistry
+from .base import (
+    HandHistoryParseError,
+    ParserRegistry,
+    UnsupportedHandHistoryError,
+)
 from .pokerstars import PokerStarsCashParser
 
 
@@ -10,6 +14,6 @@ __all__ = [
     "HandHistoryParseError",
     "ParserRegistry",
     "PokerStarsCashParser",
+    "UnsupportedHandHistoryError",
     "default_registry",
 ]
-

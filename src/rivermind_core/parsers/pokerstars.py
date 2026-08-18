@@ -13,7 +13,11 @@ from rivermind_core.models import (
     Player,
 )
 
-from .base import HandHistoryParseError, HandHistoryParser
+from .base import (
+    HandHistoryParseError,
+    HandHistoryParser,
+    UnsupportedHandHistoryError,
+)
 
 
 MONEY = r"[$€£]?([\d,]+(?:\.\d+)?)"
@@ -44,8 +48,12 @@ RAISE_RE = re.compile(
     r"(?P<all_in> and is all-in)?$"
 )
 RETURN_RE = re.compile(rf"^Uncalled bet \({MONEY}\) returned to (?P<name>.+)$")
-COLLECT_RE = re.compile(rf"^(?P<name>.+) collected {MONEY} from pot$")
-SUMMARY_RE = re.compile(rf"^Total pot {MONEY} \| Rake {MONEY}$")
+COLLECT_RE = re.compile(
+    rf"^(?P<name>.+) collected {MONEY} from (?:main |side )?pot(?:-\d+)?$"
+)
+SUMMARY_RE = re.compile(rf"^Total pot {MONEY}(?: .*)? \| Rake {MONEY}$")
+SHOW_RE = re.compile(r"^(?P<name>.+): shows \[(?P<cards>[^]]+)](?: .*)?$")
+MUCK_RE = re.compile(r"^(?P<name>.+): (?:mucks hand|doesn't show hand)$")
 CARD_RE = re.compile(r"\b[2-9TJQKA][cdhs]\b")
 
 
@@ -66,21 +74,27 @@ class PokerStarsCashParser(HandHistoryParser):
     def parse(self, raw_text: str) -> HandHistory:
         lines = [line.strip() for line in raw_text.strip().splitlines() if line.strip()]
         if not lines:
-            raise HandHistoryParseError("Hand history is empty")
+            raise HandHistoryParseError("Hand history is empty", code="empty_hand")
+
+        if "Tournament #" in lines[0]:
+            raise UnsupportedHandHistoryError(
+                "PokerStars tournament hands are not supported yet",
+                code="pokerstars_tournament_not_supported",
+            )
 
         header = HEADER_RE.fullmatch(lines[0])
         if header is None:
             raise HandHistoryParseError(
-                "Unsupported PokerStars header; v0.1 accepts English cash-game hands"
-            )
-        if "Tournament #" in header.group("game_name"):
-            raise HandHistoryParseError(
-                "Unsupported PokerStars header; tournament hands require a dedicated parser"
+                "Malformed or unsupported PokerStars cash-game header",
+                code="pokerstars_malformed_header",
             )
 
         table_line = next((TABLE_RE.fullmatch(line) for line in lines if TABLE_RE.fullmatch(line)), None)
         if table_line is None:
-            raise HandHistoryParseError("Missing or unsupported PokerStars table line")
+            raise HandHistoryParseError(
+                "Missing or unsupported PokerStars table line",
+                code="pokerstars_missing_table",
+            )
 
         players: list[Player] = []
         for line in lines:
@@ -96,7 +110,10 @@ class PokerStarsCashParser(HandHistoryParser):
             )
 
         if len(players) < 2:
-            raise HandHistoryParseError("A hand must contain at least two seats")
+            raise HandHistoryParseError(
+                "A hand must contain at least two seats",
+                code="pokerstars_missing_players",
+            )
 
         hero_name: str | None = None
         hero_cards: tuple[str, ...] = ()
@@ -113,6 +130,20 @@ class PokerStarsCashParser(HandHistoryParser):
                     player,
                     is_hero=player.name == hero_name,
                     hole_cards=hero_cards if player.name == hero_name else (),
+                )
+                for player in players
+            ]
+
+        shown_cards = {
+            shown.group("name"): tuple(shown.group("cards").split())
+            for line in lines
+            if (shown := SHOW_RE.fullmatch(line)) is not None
+        }
+        if shown_cards:
+            players = [
+                replace(
+                    player,
+                    hole_cards=shown_cards.get(player.name, player.hole_cards),
                 )
                 for player in players
             ]
@@ -149,12 +180,25 @@ class PokerStarsCashParser(HandHistoryParser):
                 total_pot = _decimal(summary.group(1))
                 rake = _decimal(summary.group(2))
                 continue
+            if line.startswith("Total pot "):
+                raise HandHistoryParseError(
+                    f"Unsupported PokerStars summary line: {line}",
+                    code="pokerstars_unsupported_summary",
+                )
             if in_summary:
                 continue
 
             parsed_action = self._parse_action(line, street, len(actions))
             if parsed_action is not None:
                 actions.append(parsed_action)
+                continue
+            if any(line.startswith(f"{player.name}: ") for player in players):
+                if ": said, " in line:
+                    continue
+                raise HandHistoryParseError(
+                    f"Unsupported PokerStars action line: {line}",
+                    code="pokerstars_unsupported_action",
+                )
 
         return HandHistory(
             site="pokerstars",
@@ -257,6 +301,26 @@ class PokerStarsCashParser(HandHistoryParser):
                 player=collected.group("name"),
                 action_type=ActionType.COLLECT,
                 amount=_decimal(collected.group(2)),
+                raw_text=line,
+            )
+
+        shown = SHOW_RE.fullmatch(line)
+        if shown:
+            return Action(
+                sequence=sequence,
+                street=BettingRound.SHOWDOWN,
+                player=shown.group("name"),
+                action_type=ActionType.SHOW,
+                raw_text=line,
+            )
+
+        mucked = MUCK_RE.fullmatch(line)
+        if mucked:
+            return Action(
+                sequence=sequence,
+                street=BettingRound.SHOWDOWN,
+                player=mucked.group("name"),
+                action_type=ActionType.MUCK,
                 raw_text=line,
             )
 

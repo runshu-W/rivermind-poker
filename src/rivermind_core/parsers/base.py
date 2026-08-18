@@ -9,6 +9,17 @@ from rivermind_core.models import HandHistory
 class HandHistoryParseError(ValueError):
     """Raised when no parser can normalize a hand or parsing fails."""
 
+    def __init__(self, message: str, *, code: str = "parse_error") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class UnsupportedHandHistoryError(HandHistoryParseError):
+    """Raised when a hand is recognized but its variant is not supported."""
+
+    def __init__(self, message: str, *, code: str = "unsupported_format") -> None:
+        super().__init__(message, code=code)
+
 
 class HandHistoryParser(ABC):
     name: str
@@ -30,13 +41,21 @@ class ParserRegistry:
         self._parsers.append(parser)
 
     def parse(self, raw_text: str) -> HandHistory:
+        _, hand = self.parse_with_parser(raw_text)
+        return hand
+
+    def parse_with_parser(
+        self, raw_text: str
+    ) -> tuple[HandHistoryParser, HandHistory]:
         normalized = raw_text.strip()
         if not normalized:
-            raise HandHistoryParseError("Hand history is empty")
+            raise HandHistoryParseError("Hand history is empty", code="empty_hand")
 
         for parser in self._parsers:
             if parser.can_parse(normalized):
-                return parser.parse(normalized)
+                return parser, parser.parse(normalized)
 
-        raise HandHistoryParseError("No registered parser recognizes this hand history")
-
+        raise UnsupportedHandHistoryError(
+            "No registered parser recognizes this hand history",
+            code="unknown_format",
+        )

@@ -14,12 +14,15 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 
 ## 当前状态
 
-项目处于 Phase 0。第一条工程纵向切片已经建立：
+项目处于 Phase 0。第一条可运行的导入纵向切片已经建立：
 
 - 规范化手牌领域模型；
 - 可插拔牌谱解析器接口；
-- PokerStars 现金桌文本解析器 v0.1；
-- 黄金牌谱测试和 GitHub Actions CI；
+- PokerStars 英文现金桌文本解析器 v0.2；
+- 多手拆分、来源识别、逐手错误隔离和稳定指纹去重；
+- SQLite 本地事务存储、可恢复批次报告和原始牌谱回放；
+- 文件/文件夹导入 CLI，以及成功、重复、失败、不支持四类结果；
+- 13 项自动化测试和可重复的批量导入基准脚本；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -28,7 +31,18 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 
 ```powershell
 $env:PYTHONPATH = "src"
+python -m rivermind_core import tests/fixtures --database data/dev.db
+
+# 运行测试
+$env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
+```
+
+机器可读导入报告：
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m rivermind_core import tests/fixtures --database data/dev.db --json
 ```
 
 解析一手牌：
@@ -45,11 +59,13 @@ print(hand.hand_id, hand.board, len(hand.actions))
 ```text
 src/rivermind_core/      牌谱标准化与领域核心
 tests/                   黄金牌谱和单元测试
+benchmarks/              可重复的导入性能基准
 docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
+导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)。
+
 ## 产品边界
 
 RiverMind 用于训练、复盘和研究，不提供自动点击、牌桌注入、屏幕读取或隐蔽的实时行动建议。导入牌谱默认不用于模型训练，数据授权将与分析授权分开。
-

@@ -81,7 +81,18 @@ class PokerStarsCashParserTest(unittest.TestCase):
         with self.assertRaises(HandHistoryParseError):
             PokerStarsCashParser().parse(raw)
 
+    def test_parser_does_not_silently_drop_unknown_player_action(self) -> None:
+        raw = self.raw_hand.replace(
+            "Villain: posts big blind $0.10",
+            "Villain: posts big blind $0.10\nHero: straddles $0.20",
+            1,
+        )
+
+        with self.assertRaisesRegex(
+            HandHistoryParseError, "Unsupported PokerStars action line"
+        ):
+            PokerStarsCashParser().parse(raw)
+
 
 if __name__ == "__main__":
     unittest.main()
-

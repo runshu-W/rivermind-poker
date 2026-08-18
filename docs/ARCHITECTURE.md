@@ -31,15 +31,19 @@ flowchart LR
 |---|---|---|
 | Canonical Model | 玩家、筹码、行动、街道、牌面与结算 | 已建立 v0.1 |
 | Parser Registry | 识别来源并路由到站点解析器 | 已建立 v0.1 |
-| PokerStars Parser | 英文现金桌文本解析 | 第一条纵向切片 |
-| Import Pipeline | 文件扫描、拆手、去重、失败隔离 | 待实现 |
-| Analytics Store | 本地 DuckDB/Parquet 或服务端 ClickHouse | 待基准后决定 |
+| PokerStars Parser | 英文现金桌文本解析 | v0.2，MTT 待实现 |
+| Import Pipeline | 文件扫描、拆手、去重、失败隔离 | v0.1 已实现 |
+| Import Store | 导入审计、规范化 JSON、原文回放 | SQLite v0.1 已实现 |
+| Analytics Store | 统计查询的宽表/列式存储 | DuckDB/Parquet 待基准决定 |
 | Stats Engine | 固定核心指标和过滤 | 待实现 |
 | Leak Engine | 基于证据的漏洞规则 | 待实现 |
 | AI Coach | 证据约束解释 | 待实现 |
 | GTO Matcher | 映射到验证解法 | Beta 可选 |
 
+## 当前存储边界
+
+SQLite 只承担 Beta 的本地事务系统职责：导入批次、逐手状态、规范化载荷、原文和去重索引。统计引擎不直接依赖 SQLite 的物理结构；后续会依据 100k/1M 手牌基准，在 SQLite 派生表与 DuckDB/Parquet 之间选择分析存储。这样可以先交付可靠导入，又不提前锁死长期列式架构。
+
 ## 长期边界
 
 策略服务输出 `PolicyDecision`，解释服务读取 `ExplanationEvidence`。解释服务永远不能生成被游戏引擎直接执行的动作字段。这条边界从数据模型和 API 权限两层实施。
-

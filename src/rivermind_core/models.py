@@ -37,6 +37,8 @@ class ActionType(StrEnum):
     RAISE = "raise"
     RETURN = "return"
     COLLECT = "collect"
+    SHOW = "show"
+    MUCK = "muck"
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,4 +146,3 @@ def _validate_cards(cards: tuple[str, ...] | list[str]) -> None:
     invalid = [card for card in cards if not CARD_PATTERN.fullmatch(card)]
     if invalid:
         raise HandValidationError(f"Invalid card codes: {invalid}")
-
