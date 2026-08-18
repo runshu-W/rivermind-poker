@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_CEILING
@@ -40,6 +42,7 @@ from rivermind_core.gto_matcher import (
 from rivermind_core.gto_specs import (
     RakeSpec,
     SolutionObjective,
+    SolutionQuality,
     SpecValidationError,
     load_solution_catalog,
 )
@@ -56,6 +59,21 @@ from rivermind_core.reports import HandQuery, PlayerHandReport, StatMetric
 from rivermind_core.sessions import SessionSummary
 from rivermind_core.stats import METRIC_NAMES, PlayerStats, StatValue, StatsFilter
 from rivermind_core.storage import SQLiteHandStore
+from rivermind_core.quality_gate import verify_quality_attestation
+from rivermind_core.strategy_artifacts import (
+    STRATEGY_ARTIFACT_SCHEMA_VERSION,
+    ArtifactValidationError,
+    load_artifact_document,
+    resolve_artifact_path,
+    serialize_strategy_artifact,
+    strategy_artifact_from_dict,
+    verify_catalog_artifact,
+)
+from rivermind_core.strategy_query import (
+    ComboNotCoveredError,
+    StrategyQueryError,
+    build_strategy_evidence,
+)
 
 
 HAND_HISTORY_SUFFIXES = {".txt", ".log", ".hh"}
@@ -186,25 +204,60 @@ def build_parser() -> argparse.ArgumentParser:
         "gto-match",
         help="Match one real decision node to a versioned solution catalog",
     )
-    gto_match_parser.add_argument("site")
-    gto_match_parser.add_argument("hand_id")
-    gto_match_parser.add_argument("--before-action", type=int, required=True)
-    gto_match_parser.add_argument(
-        "--catalog",
-        type=Path,
-        default=Path("solutions/catalog.json"),
-    )
-    gto_match_parser.add_argument(
-        "--objective",
-        choices=[item.value for item in SolutionObjective],
-        default=SolutionObjective.CHIP_EV.value,
-    )
-    gto_match_parser.add_argument("--tournament-context-id")
-    gto_match_parser.add_argument("--rake-model")
-    gto_match_parser.add_argument("--rake-percent", type=Decimal)
-    gto_match_parser.add_argument("--rake-cap-bb", type=Decimal)
+    _add_gto_node_arguments(gto_match_parser)
     _add_database_argument(gto_match_parser)
     gto_match_parser.add_argument("--json", action="store_true")
+
+    gto_artifact_verify_parser = subparsers.add_parser(
+        "gto-artifact-verify",
+        help="Verify one catalog solution's strategy artifact end to end",
+    )
+    gto_artifact_verify_parser.add_argument("catalog", type=Path)
+    gto_artifact_verify_parser.add_argument("solution_id")
+    gto_artifact_verify_parser.add_argument("--json", action="store_true")
+
+    gto_quality_verify_parser = subparsers.add_parser(
+        "gto-quality-verify",
+        help="Run the independent quality gate over a signed verified grant",
+    )
+    gto_quality_verify_parser.add_argument("attestation", type=Path)
+    gto_quality_verify_parser.add_argument("--catalog", type=Path, required=True)
+    gto_quality_verify_parser.add_argument("--json", action="store_true")
+
+    gto_artifact_package_parser = subparsers.add_parser(
+        "gto-artifact-package",
+        help="Validate a draft artifact and emit its canonical bytes and SHA-256",
+    )
+    gto_artifact_package_parser.add_argument("draft", type=Path)
+    gto_artifact_package_parser.add_argument("--catalog", type=Path, required=True)
+    gto_artifact_package_parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Write the canonical artifact to the path the catalog declares",
+    )
+    gto_artifact_package_parser.add_argument(
+        "--update-catalog",
+        action="store_true",
+        help="Also rewrite the catalog's recorded SHA-256 for this solution",
+    )
+    gto_artifact_package_parser.add_argument("--json", action="store_true")
+
+    gto_query_parser = subparsers.add_parser(
+        "gto-query",
+        help="Return verified strategy facts for one real decision node",
+    )
+    _add_gto_node_arguments(gto_query_parser)
+    gto_query_parser.add_argument(
+        "--combo",
+        help="Canonical two-card combination such as AhKh; omit for the slice aggregate",
+    )
+    gto_query_parser.add_argument(
+        "--attestation",
+        type=Path,
+        help="Signed verified grant; required before any result is teachable",
+    )
+    _add_database_argument(gto_query_parser)
+    gto_query_parser.add_argument("--json", action="store_true")
 
     report_parser = subparsers.add_parser(
         "report", help="Generate the local H2N-lite analysis page"
@@ -235,6 +288,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "hands": _run_hands,
         "replay": _run_replay,
         "gto-match": _run_gto_match,
+        "gto-artifact-verify": _run_gto_artifact_verify,
+        "gto-quality-verify": _run_gto_quality_verify,
+        "gto-artifact-package": _run_gto_artifact_package,
+        "gto-query": _run_gto_query,
         "report": _run_report,
     }
     return runners[args.command](args)
@@ -569,44 +626,70 @@ def _run_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_gto_node_arguments(parser: argparse.ArgumentParser) -> None:
+    """Arguments shared by every command that pins one real decision node."""
+
+    parser.add_argument("site")
+    parser.add_argument("hand_id")
+    parser.add_argument("--before-action", type=int, required=True)
+    parser.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("solutions/catalog.json"),
+    )
+    parser.add_argument(
+        "--objective",
+        choices=[item.value for item in SolutionObjective],
+        default=SolutionObjective.CHIP_EV.value,
+    )
+    parser.add_argument("--tournament-context-id")
+    parser.add_argument("--rake-model")
+    parser.add_argument("--rake-percent", type=Decimal)
+    parser.add_argument("--rake-cap-bb", type=Decimal)
+
+
+def _gto_rake(args: argparse.Namespace) -> RakeSpec | None:
+    """Cash rake structure must be supplied whole; it is never inferred."""
+
+    values = (args.rake_model, args.rake_percent, args.rake_cap_bb)
+    if any(item is not None for item in values) and not all(
+        item is not None for item in values
+    ):
+        raise ValueError(
+            "rake-model, rake-percent, and rake-cap-bb must be supplied together"
+        )
+    if args.rake_model is None:
+        return None
+    return RakeSpec(
+        model_id=args.rake_model,
+        percent=args.rake_percent,
+        cap_bb=args.rake_cap_bb,
+    )
+
+
+def _observed_gto_node(args: argparse.Namespace):
+    """Load the stored hand and extract the de-identified pre-decision node."""
+
+    rake = _gto_rake(args)
+    with SQLiteHandStore(args.database) as store:
+        hand = store.load_hand(args.site, args.hand_id)
+    if hand is None:
+        raise ValueError(f"hand not found: {args.site} #{args.hand_id}")
+    return extract_decision_game_spec(
+        hand,
+        before_action=args.before_action,
+        objective=SolutionObjective(args.objective),
+        rake=rake,
+        tournament_context_id=args.tournament_context_id,
+    )
+
+
 def _run_gto_match(args: argparse.Namespace) -> int:
     if not _database_exists(args.database):
         return 2
-    rake_values = (args.rake_model, args.rake_percent, args.rake_cap_bb)
-    if any(item is not None for item in rake_values) and not all(
-        item is not None for item in rake_values
-    ):
-        return _print_value_error(
-            ValueError(
-                "rake-model, rake-percent, and rake-cap-bb must be supplied together"
-            )
-        )
     try:
         catalog = load_solution_catalog(args.catalog)
-        rake = (
-            None
-            if args.rake_model is None
-            else RakeSpec(
-                model_id=args.rake_model,
-                percent=args.rake_percent,
-                cap_bb=args.rake_cap_bb,
-            )
-        )
-        with SQLiteHandStore(args.database) as store:
-            hand = store.load_hand(args.site, args.hand_id)
-        if hand is None:
-            print(
-                f"error: hand not found: {args.site} #{args.hand_id}",
-                file=sys.stderr,
-            )
-            return 2
-        observed = extract_decision_game_spec(
-            hand,
-            before_action=args.before_action,
-            objective=SolutionObjective(args.objective),
-            rake=rake,
-            tournament_context_id=args.tournament_context_id,
-        )
+        observed = _observed_gto_node(args)
         result = match_game_spec(observed, catalog)
     except (OSError, SpecValidationError, ValueError) as exc:
         return _print_value_error(ValueError(str(exc)))
@@ -642,6 +725,400 @@ def _run_gto_match(args: argparse.Namespace) -> int:
         if result.status == MatchStatus.UNSUPPORTED:
             print("No strategy or EV was returned.")
     return 0
+
+
+def _run_gto_artifact_verify(args: argparse.Namespace) -> int:
+    """Prove a catalog entry's strategy artifact, or refuse to use it."""
+
+    try:
+        catalog = load_solution_catalog(args.catalog)
+        verification = verify_catalog_artifact(
+            catalog,
+            args.solution_id,
+            root=args.catalog.parent,
+        )
+    except (OSError, SpecValidationError, ValueError) as exc:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "solution_id": args.solution_id,
+                        "catalog": str(args.catalog),
+                        "strategy_content_verified": False,
+                        "error": _safe_text(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return _print_value_error(ValueError(str(exc)))
+
+    payload = {
+        "catalog": str(args.catalog),
+        "verification": verification.to_dict(),
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        artifact = verification.artifact
+        print(
+            f"Artifact verified: {verification.solution_id} · "
+            f"{verification.quality.value} · node {verification.node_id}"
+        )
+        print(f"sha256 {verification.artifact_sha256}")
+        print(
+            f"GameSpec {verification.game_spec_fingerprint[:12]} · "
+            f"tree {verification.action_tree_version} · "
+            f"{len(artifact.actions)} actions · {len(artifact.entries)} combos · "
+            f"EV {'present' if artifact.ev_present else 'absent'} "
+            f"({artifact.ev_unit.value}, {artifact.ev_semantics.value})"
+        )
+        if verification.quality is not SolutionQuality.VERIFIED:
+            print(
+                "Quality label is not 'verified'. This content must not be presented "
+                "to a learner as GTO."
+            )
+    return 0
+
+
+def _run_gto_quality_verify(args: argparse.Namespace) -> int:
+    """Grant nothing. Either the signed grant survives the gate, or it does not."""
+
+    try:
+        catalog = load_solution_catalog(args.catalog)
+        verification = verify_quality_attestation(
+            args.attestation,
+            catalog=catalog,
+            catalog_root=args.catalog.parent,
+        )
+    except (OSError, SpecValidationError, ValueError) as exc:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "attestation": str(args.attestation),
+                        "catalog": str(args.catalog),
+                        "grant_valid": False,
+                        "error": _safe_text(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return _print_value_error(ValueError(str(exc)))
+
+    payload = {
+        "attestation": str(args.attestation),
+        "catalog": str(args.catalog),
+        "grant": verification.to_dict(),
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        report = verification.report
+        print(
+            f"Grant valid: {verification.solution_id} · "
+            f"{verification.attestation.attestation_id} · "
+            f"policy {verification.policy_version}"
+        )
+        print(
+            f"Report {report.report_id} · claim {report.claim_class.value} · "
+            f"{report.solve.convergence_metric.value} "
+            f"{report.solve.convergence_value} <= "
+            f"{report.solve.convergence_threshold} "
+            f"{report.solve.convergence_unit.value}"
+        )
+        print(
+            f"Source {report.source.origin.value}/{report.source.provider} · "
+            f"licence {report.source.license_id} · "
+            f"display_allowed={report.source.display_allowed}"
+        )
+        for reviewer in verification.attestation.reviewers:
+            print(f"- signed by {reviewer.reviewer_id} ({reviewer.role.value})")
+        for limit in report.limits:
+            print(f"! limit: {limit}")
+    return 0
+
+
+def _run_gto_artifact_package(args: argparse.Namespace) -> int:
+    """Normalize a draft artifact into the exact bytes the catalog will hash."""
+
+    if args.update_catalog and not args.write:
+        return _print_value_error(
+            ValueError(
+                "--update-catalog requires --write; refusing to record a hash for "
+                "bytes that were never written"
+            )
+        )
+    written = False
+    catalog_updated = False
+    try:
+        catalog = load_solution_catalog(args.catalog)
+        document = load_artifact_document(args.draft)
+        if not isinstance(document, dict):
+            raise ValueError("draft artifact must be a JSON object")
+        solution_id = document.get("solution_id")
+        if not isinstance(solution_id, str):
+            raise ValueError("draft artifact must carry a string solution_id")
+        solution = next(
+            (item for item in catalog.solutions if item.solution_id == solution_id),
+            None,
+        )
+        if solution is None:
+            raise ValueError(f"catalog does not contain solution {solution_id!r}")
+        artifact = strategy_artifact_from_dict(document, game_spec=solution.game_spec)
+        canonical = serialize_strategy_artifact(artifact)
+        digest = hashlib.sha256(canonical).hexdigest()
+        target = resolve_artifact_path(
+            args.catalog.parent, solution.artifact_id, must_exist=False
+        )
+        _guard_package_target(target, args.catalog, solution_id)
+
+        if args.write:
+            _atomic_write(target, canonical)
+            written = True
+            if args.update_catalog:
+                _rewrite_catalog_hash(args.catalog, solution_id, digest)
+                catalog_updated = True
+                # Postcondition: the pair we just wrote must verify together.
+                verify_catalog_artifact(
+                    load_solution_catalog(args.catalog),
+                    solution_id,
+                    root=args.catalog.parent,
+                )
+    except (OSError, SpecValidationError, ValueError) as exc:
+        if written and not catalog_updated:
+            print(
+                "warning: the artifact was written but the catalog still records "
+                "the previous sha256; verification will fail until you re-run",
+                file=sys.stderr,
+            )
+        return _print_value_error(ValueError(str(exc)))
+
+    result = {
+        "solution_id": solution_id,
+        "artifact_path": solution.artifact_id,
+        "canonical_bytes": len(canonical),
+        "canonical_sha256": digest,
+        "catalog_sha256": solution.artifact_sha256,
+        "sha256_matches_catalog": digest == solution.artifact_sha256,
+        "draft_was_canonical": args.draft.read_bytes() == canonical,
+        "written": written,
+        "catalog_updated": catalog_updated,
+        "quality": artifact.provenance.quality.value,
+        "boundary": (
+            "Packaging normalizes formatting and decimals. It validates content "
+            "but grants no quality label; 'verified' still requires the quality gate."
+        ),
+    }
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(f"Canonical sha256: {digest} ({len(canonical)} bytes)")
+        print(f"Draft already canonical: {result['draft_was_canonical']}")
+        print(f"Matches catalog entry: {result['sha256_matches_catalog']}")
+        if written:
+            print(f"Wrote {solution.artifact_id}")
+        if catalog_updated:
+            print(f"Updated catalog sha256 for {solution_id}")
+            print("Any existing quality attestation for this solution is now void.")
+        elif not result["sha256_matches_catalog"]:
+            print(
+                "Catalog still records a different sha256; re-run with "
+                "--write --update-catalog, or edit the catalog deliberately."
+            )
+    return 0
+
+
+def _guard_package_target(target: Path, catalog: Path, solution_id: str) -> None:
+    """Never let packaging clobber a file that is not this solution's artifact."""
+
+    if target.resolve() == catalog.resolve():
+        raise ValueError(
+            "the catalog entry points at the catalog file itself; refusing to "
+            "overwrite it with an artifact"
+        )
+    if target.is_dir():
+        raise ValueError(f"artifact path is a directory: {target}")
+    if not target.exists():
+        return
+    try:
+        existing = json.loads(target.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise ValueError(
+            f"refusing to overwrite {target}: it is not readable as a strategy artifact"
+        ) from None
+    if (
+        not isinstance(existing, dict)
+        or existing.get("schema_version") != STRATEGY_ARTIFACT_SCHEMA_VERSION
+        or existing.get("solution_id") != solution_id
+    ):
+        raise ValueError(
+            f"refusing to overwrite {target}: it is not the artifact of "
+            f"{solution_id!r}"
+        )
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    """Write via a sibling temp file so a failure cannot leave a half file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_bytes(payload)
+    os.replace(temporary, path)
+
+
+def _rewrite_catalog_hash(catalog: Path, solution_id: str, digest: str) -> None:
+    payload = json.loads(catalog.read_bytes().decode("utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("solutions"), list):
+        raise ValueError("catalog does not have the expected shape")
+    updated = 0
+    for entry in payload["solutions"]:
+        if isinstance(entry, dict) and entry.get("solution_id") == solution_id:
+            artifact = entry.get("artifact")
+            if not isinstance(artifact, dict):
+                raise ValueError("catalog entry has no artifact object")
+            artifact["sha256"] = digest
+            updated += 1
+    if updated != 1:
+        raise ValueError(
+            f"expected exactly one catalog entry for {solution_id!r}, found {updated}"
+        )
+    _atomic_write(
+        catalog, (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    )
+
+
+def _run_gto_query(args: argparse.Namespace) -> int:
+    """Return strategy facts only after an exact match and a full artifact check."""
+
+    if not _database_exists(args.database):
+        return 2
+    try:
+        catalog = load_solution_catalog(args.catalog)
+        observed = _observed_gto_node(args)
+        match = match_game_spec(observed, catalog)
+    except (OSError, SpecValidationError, ValueError) as exc:
+        return _print_value_error(ValueError(str(exc)))
+
+    payload: dict[str, object] = {
+        "source": {
+            "site": args.site,
+            "hand_id": args.hand_id,
+            "before_action": args.before_action,
+            "combo": args.combo,
+        },
+        "observed_game_spec": observed.to_dict(),
+        "match": match.to_dict(),
+        "strategy_available": False,
+        "reason": None,
+        "error": None,
+        "artifact_verification": None,
+        "quality_grant": None,
+        "strategy_evidence": None,
+        "boundary": (
+            "Strategy facts require an exact node match plus a fully verified "
+            "artifact. Anything else returns no frequencies and no EV."
+        ),
+    }
+
+    if match.status is not MatchStatus.EXACT or match.solution is None:
+        payload["reason"] = (
+            "match_not_exact"
+            if match.status is MatchStatus.APPROXIMATE
+            else f"match_{match.reason.value}"
+        )
+        return _emit_gto_query(args, payload, exit_code=0)
+
+    try:
+        verification = verify_catalog_artifact(
+            catalog,
+            match.solution.solution_id,
+            root=args.catalog.parent,
+        )
+    except (OSError, SpecValidationError, ValueError) as exc:
+        payload["reason"] = "artifact_verification_failed"
+        payload["error"] = _safe_text(exc)
+        return _emit_gto_query(args, payload, exit_code=2)
+
+    payload["artifact_verification"] = verification.to_dict()
+
+    attestation = None
+    if args.attestation is not None:
+        try:
+            attestation = verify_quality_attestation(
+                args.attestation,
+                catalog=catalog,
+                catalog_root=args.catalog.parent,
+            )
+        except (OSError, SpecValidationError, ValueError) as exc:
+            payload["reason"] = "attestation_verification_failed"
+            payload["error"] = _safe_text(exc)
+            return _emit_gto_query(args, payload, exit_code=2)
+        payload["quality_grant"] = attestation.to_dict()
+
+    try:
+        evidence = build_strategy_evidence(
+            verification, combo=args.combo, attestation=attestation
+        )
+    except ComboNotCoveredError as exc:
+        payload["reason"] = "combo_not_covered"
+        payload["error"] = _safe_text(exc)
+        return _emit_gto_query(args, payload, exit_code=0)
+    except StrategyQueryError as exc:
+        payload["reason"] = "attestation_scope_mismatch"
+        payload["error"] = _safe_text(exc)
+        return _emit_gto_query(args, payload, exit_code=2)
+    except ArtifactValidationError as exc:
+        payload["reason"] = "invalid_combo"
+        payload["error"] = _safe_text(exc)
+        return _emit_gto_query(args, payload, exit_code=2)
+
+    payload["strategy_available"] = True
+    payload["reason"] = "verified_artifact"
+    payload["strategy_evidence"] = evidence.to_dict()
+    return _emit_gto_query(args, payload, exit_code=0)
+
+
+def _emit_gto_query(
+    args: argparse.Namespace,
+    payload: dict[str, object],
+    *,
+    exit_code: int,
+) -> int:
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+        return exit_code
+    match = payload["match"]
+    assert isinstance(match, dict)
+    print(
+        f"GTO query: {match['status']} ({match['reason']}) · "
+        f"node {str(match['observed_fingerprint'])[:12]}"
+    )
+    if not payload["strategy_available"]:
+        print(f"No strategy returned: {payload['reason']}")
+        if payload["error"] is not None:
+            print(f"Detail: {payload['error']}")
+        return exit_code
+    evidence = payload["strategy_evidence"]
+    assert isinstance(evidence, dict)
+    scope = (
+        f"combo {evidence['combo']}"
+        if evidence["combo"] is not None
+        else f"aggregate over {evidence['combo_count']} stored combos"
+    )
+    print(
+        f"Solution {evidence['solution_id']} · node {evidence['node_id']} · "
+        f"quality {evidence['quality']} · {scope}"
+    )
+    for action in evidence["actions"]:
+        size = "" if action["size_bb"] is None else f" {action['size_bb']}bb"
+        ev = "" if action["ev"] is None else f" · EV {action['ev']} {evidence['ev_unit']}"
+        print(f"- {action['action_id']}{size}: {action['probability']}{ev}")
+    if not evidence["usable_for_teaching"]:
+        print(
+            f"Not teachable ({evidence['teaching_block_reason']}). These numbers "
+            "exercise the pipeline only and must not be shown to a learner as GTO."
+        )
+    return exit_code
 
 
 def _run_report(args: argparse.Namespace) -> int:
@@ -763,8 +1240,14 @@ def _database_exists(path: Path) -> bool:
     return False
 
 
+def _safe_text(value: object) -> str:
+    """Strip anything that would crash the UTF-8 encoder on the way out."""
+
+    return str(value).encode("utf-8", "replace").decode("utf-8")
+
+
 def _print_value_error(error: ValueError) -> int:
-    print(f"error: {error}", file=sys.stderr)
+    print(f"error: {_safe_text(error)}", file=sys.stderr)
     return 2
 
 

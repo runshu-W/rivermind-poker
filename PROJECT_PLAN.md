@@ -722,13 +722,17 @@ H2N-lite 入口将首次可用时间提前到 **8–12 周**；GTO 闭环仍按 
 
 ### 阶段 4：GTO Study/Practice 闭环（第 4–6 个月）
 
-**当前进度：** `GameSpec/SolutionSpec/SolutionCatalog` 元数据契约和牌谱节点精确/阈值近似/不支持匹配 v0.1 已实现；默认目录为空，真实策略制品、EV 与训练界面尚未接入。
+**当前进度：** `GameSpec/SolutionSpec/SolutionCatalog` 元数据契约、牌谱节点精确/阈值近似/不支持匹配、`strategy-artifact/1.0.0` 策略制品协议与严格 loader，以及 `solve-quality-report/1.0.0` + `quality-attestation/1.0.0` 独立质量门均已实现；`gto-query` 可以走完 match → verify → gate → query。默认目录仍为空，仓库只有手写的 `test_only` 纵向切片，没有任何签署，真实解法与训练界面尚未接入。
 
 **交付：**
 
 - 按真实用户查询量生产 6-max Cash/MTT 高频解法；
 - [x] `GameSpec/SolutionSpec`、解法质量标签和严格版本目录 v0.1；
 - [x] 牌谱决策前节点精确/阈值近似/不支持匹配和逐字段映射差异 v0.1；
+- [x] `strategy-artifact/1.0.0` 协议、沙箱化 loader、SHA-256/身份/动作/组合/概率/EV/来源校验 v0.1；
+- [x] `strategy-evidence/1.0.0` 只读事实、`strategy-aggregation/1.0.0` 加权汇总，以及 `gto-artifact-verify` / `gto-query` CLI；
+- [x] `solve-quality-report/1.0.0`、`quality-attestation/1.0.0` 与 `quality-gate-policy/1.0.0`：loader 之外的独立 `verified` 授予门、双人签署、字节钉死与 claim_class 约束；
+- 按 `GameSpec` 指纹与硬维度建立目录索引，替代线性扫描；
 - 策略矩阵、范围、EV/EQ 和节点导航；
 - Preflop/Spot/Street/Full Hand 训练；
 - Analyze → Study → Practice → 复测闭环。

@@ -1,0 +1,69 @@
+{
+  "schema_version": "solution-catalog/1.0.0",
+  "catalog_id": "rivermind-test-only",
+  "catalog_version": "0.1.0",
+  "solutions": [
+    {
+      "schema_version": "solution-spec/1.0.0",
+      "solution_id": "test-only.pokerstars-cash.btn-flop-cbet",
+      "game_spec": {
+        "schema_version": "game-spec/1.0.0",
+        "game_type": "cash",
+        "players_dealt": 2,
+        "blinds_bb": {
+          "small": "0.5",
+          "big": "1"
+        },
+        "antes": [],
+        "objective": "chip_ev",
+        "tournament_context_id": null,
+        "rake": {
+          "model_id": "pokerstars.cash.example",
+          "percent": "5",
+          "cap_bb": "3"
+        },
+        "node": {
+          "street": "flop",
+          "board": [
+            "2c",
+            "7d",
+            "Ts"
+          ],
+          "player_to_act": "BTN",
+          "active_positions": [
+            "BB",
+            "BTN"
+          ],
+          "stacks": [
+            {
+              "position": "BB",
+              "remaining_bb": "97"
+            },
+            {
+              "position": "BTN",
+              "remaining_bb": "97"
+            }
+          ],
+          "action_history": [
+            "preflop|BTN|post_small_blind|amount_bb=0.5",
+            "preflop|BB|post_big_blind|amount_bb=1",
+            "preflop|BTN|raise|amount_bb=2|to_bb=3",
+            "preflop|BB|call|amount_bb=2",
+            "flop|BB|check"
+          ],
+          "pot_bb": "6"
+        }
+      },
+      "solver": {
+        "name": "rivermind.handwritten",
+        "version": "0.0.0"
+      },
+      "action_tree_version": "rivermind.test-only.flop-cbet/0.0.1",
+      "quality": "test_only",
+      "artifact": {
+        "id": "fixtures/btn_flop_cbet.test_only.json",
+        "sha256": "85c33b76fc50a72f2b12f3bf847f37f921ffef9cd3dd40790f081ba2d5a0705d"
+      }
+    }
+  ]
+}

@@ -1,9 +1,10 @@
 # RiverMind Poker — Claude 工程交接文稿
 
 > 交接日期：2026-08-18
+> 最近更新：2026-08-18（Strategy Artifact v0.1 与 Solve Quality Gate v0.1 完成）
 > GitHub：https://github.com/runshu-W/rivermind-poker
 > 默认分支：`main`
-> 功能基线：`577f6f2 feat: add versioned GTO node matcher`
+> 功能基线：`feat: add the independent verified quality gate`
 > 运行环境：Windows PowerShell、Python 3.11+
 
 ## 1. 接手时先做什么
@@ -20,9 +21,10 @@ python benchmarks/import_benchmark.py --hands 10000
 
 交接时的预期基线：
 
-- 81 项自动化测试全部通过；
+- 206 项自动化测试全部通过；
 - 10,000 手牌导入约 3.8 秒，机器差异允许结果浮动；
 - 1,000 个解法元数据线性匹配约 29 ms；
+- 单个 test_only 策略制品验证约 0.3 ms，单组合查询约 0.01 ms，完整质量门约 0.5 ms；
 - 工作树应为空；
 - GitHub `main` 应与本地 HEAD 一致。
 
@@ -34,8 +36,10 @@ python benchmarks/import_benchmark.py --hands 10000
 2. `PROJECT_PLAN.md`
 3. `docs/ARCHITECTURE.md`
 4. `docs/GTO_MATCHER.md`
-5. `docs/AI_COACH.md`
-6. 本交接文稿
+5. `docs/STRATEGY_ARTIFACTS.md`
+6. `docs/SOLVE_QUALITY_GATE.md`
+7. `docs/AI_COACH.md`
+8. 本交接文稿
 
 ## 2. 产品定位，不要改变
 
@@ -215,9 +219,99 @@ Matcher 返回：
 - fixture：`tests/fixtures/pokerstars_cash.txt`
 - 决策：`before_action=5`
 - 场景：BTN 3 BB open，BB call；翻牌 `2c 7d Ts`，BB check，轮到 BTN；底池 6 BB，双方剩余 97 BB；
-- 当前节点指纹：`0f0d9b6eb3eec4999cac9f4bbdde0eab2bb5762b2fa834f8353aba1566a74c74`。
+- 当前节点指纹（rake model `pokerstars.cash.example`、5%、cap 3 BB）：
+  `85b7db3215c80f307bf4c745ab4a001b68f14ab3f0c938577b99e1c6bb469f55`；
+- 不提供 rake 时同一节点的指纹是
+  `4e53d4c6009715435202549e990eb2c9753027af4320b1be0400f6187abb1e37`（现金匹配仍会失败关闭）。
+
+> 上一版交接文稿在此处写的 `0f0d9b6e…` 与代码实际输出不一致，已更正。
+> `tests/test_strategy_artifacts.py::test_demo_node_fingerprint_is_pinned` 现在固定了这个值，
+> 规范化逻辑再变时会直接测试失败，而不是让文档静默过期。
 
 这个案例只证明牌谱到解法元数据的映射链路，不证明任何下注频率或 EV。
+
+### 3.7 Strategy Artifact v0.1
+
+主要文件：
+
+- `src/rivermind_core/strategy_artifacts.py`
+- `src/rivermind_core/strategy_query.py`
+- `solutions/catalog.test_only.json`
+- `solutions/fixtures/btn_flop_cbet.test_only.json`
+- `docs/STRATEGY_ARTIFACTS.md`
+- `tests/test_strategy_artifacts.py`
+
+已冻结的版本：
+
+- `strategy-artifact/1.0.0`
+- `strategy-evidence/1.0.0`
+- `strategy-aggregation/1.0.0`
+
+冻结的设计决策：
+
+- `artifact_id` 是 catalog 文件所在目录下的相对 POSIX 路径，解析在该目录沙箱内完成；
+- 序列化格式是严格 JSON，所有数值是十进制字符串，不是 JSON number；
+- 一个 artifact 表达**单个节点**，不是一棵动作树；
+- 私牌按 **1,326 个具体组合**表达，可以正确处理公共牌冲突；
+- action 由节点显式声明（`action_id` + `kind` + `size_bb`），组合层只能引用已声明的 ID；
+- 概率、EV、权重和尺度最多 6 位小数、总计最多 18 位数字，单组合概率和与 1 的偏差不超过 `0.00001`；
+- 结构上限：每节点最多 64 个 action、最多 1,326 个组合；
+- `ev_unit = "bb"`、`ev_semantics = "action_ev_from_node"` 必填；
+- provenance 必填求解器、版本、配置 ID、生成时间、质量标签、质量报告 ID 和许可证。
+
+loader 会拒绝：哈希不符、`solution_id`/`GameSpec` 指纹/动作树/求解器身份/质量标签不一致、未知 schema、未知字段、重复 JSON 键、过深嵌套、孤立代理码点、非法与重复组合、公共牌冲突、未声明/重复/遗漏 action、概率越界或为负、概率不合计、`NaN`/`Infinity`/浮点、精度或位数越界、EV 部分声明、provenance 缺失、`fixtures/` 下的制品声称 `verified`、路径穿越与符号链接、文件缺失或超过 8 MiB。
+
+已知边界：硬链接不会被拒绝，符号链接检查与读取之间有 TOCTOU 窗口。两者都要求攻击者已能写入 catalog 目录，且内容仍被 SHA-256 钉死。不要把不受信任的目录当作 catalog 根。
+
+`build_strategy_evidence` 返回只读 `StrategyEvidence`。`usable_for_teaching` 需要**标签是 `verified`**且**提供了通过质量门的签署**，见 3.8。
+
+重要事实：
+
+- 仓库唯一的策略切片是**手写的** 4 组合 × 3 动作 fixture，质量标签 `test_only`，求解器记为 `rivermind.handwritten`；
+- 它只证明"牌谱 → 节点 → 目录 → 制品 → 只读事实"链路可用，不代表任何下注频率或 EV；
+- `solutions/catalog.json` 仍然故意为空；
+- 有一条测试会扫描 `solutions/` 下所有 JSON，确认没有文件声称 `verified`；
+- `.gitattributes` 把 `solutions/**/*.json` 和 `tests/fixtures/**` 标记为 `-text`，防止 checkout 改写行尾破坏 SHA-256。
+
+不要把"制品验证通过"写成"策略已经可信"。验证只证明身份、完整性和内部一致性，不会升级质量标签。
+
+### 3.8 Solve Quality Gate v0.1
+
+主要文件：
+
+- `src/rivermind_core/_contracts.py`（三个协议共用的严格读取原语与路径沙箱）
+- `src/rivermind_core/solve_quality.py`
+- `src/rivermind_core/quality_gate.py`
+- `docs/SOLVE_QUALITY_GATE.md`
+- `tests/test_quality_gate.py`
+
+已冻结的版本：
+
+- `solve-quality-report/1.0.0`
+- `quality-attestation/1.0.0`
+- `quality-gate-policy/1.0.0`
+
+核心结构：loader 检查"字节是不是我们预期的字节"，质量门检查"这份策略是否好到可以教人"。两条路径完全分离，loader 永远不授予标签。
+
+门要求：
+
+- 签署按字节钉死制品与报告的 SHA-256；
+- 报告、制品、目录条目三方身份一致（solution、指纹、动作树、求解器、配置 ID、`quality_report_id`）；
+- 收敛达到报告自己的门槛，且不超过 `quality-gate-policy/1.0.0` 的绝对上限（`bb_per_100` ≤ 1、`bb` ≤ 0.01、`percent_of_pot` ≤ 1）；
+- `source.display_allowed = true`；
+- `evaluation.independent_recheck = true`，且复核工具名称不等于求解器名称；
+- `solve.rake_model_id` 与节点自己的 `RakeSpec.model_id` 一致（无抽水节点必须为 `null`）；
+- `claim_class = equilibrium_approximation` 只允许两人 chip_ev 节点，且收敛指标必须是均衡距离类（`exploitability`/`nash_distance`/`best_response_gap`）；多人局与 ICM/PKO 只能用 `empirical_quality`；
+- 至少 2 名签署人、至少 1 名 `independent_reviewer`、`reviewer_id` 大小写不敏感去重；
+- 完整时间顺序：许可获取 ≤ 求解完成、求解开始 ≤ 制品生成 ≤ 授予、求解完成 ≤ 签署 ≤ 授予、授予不落在未来。
+
+重要事实：
+
+- 仓库里**没有任何**签署文件、求解质量报告或 `verified` 制品；测试里的完整授予都在临时目录中构造；
+- 一条测试会扫描整个仓库，确认没有 `.json` 含有 `quality-attestation`、`solve-quality-report` 或 `"quality": "verified"`；
+- 因此 `usable_for_teaching` 在这个仓库里恒为 `false`。门建好了，还没有任何东西通过它。
+
+**需要你确认的一件事：** 绝对收敛上限那三个数字（1 bb/100、0.01 bb、1% pot）是我给的保守起始值，没有经过真实解法校准。接入首批解法时应当重新评估，调整需要发新的 `quality-gate-policy` 版本并重新签署所有既有授予。
 
 ## 4. 当前 CLI
 
@@ -241,6 +335,10 @@ python -m rivermind_core --help
 - `hands`
 - `replay`
 - `gto-match`
+- `gto-artifact-verify`
+- `gto-quality-verify`
+- `gto-artifact-package`
+- `gto-query`
 - `report`
 
 典型本地流程：
@@ -260,9 +358,33 @@ python -m rivermind_core gto-match pokerstars 100000000001 `
   --rake-percent 5 `
   --rake-cap-bb 3 `
   --json
+
+python -m rivermind_core gto-artifact-verify `
+  solutions/catalog.test_only.json `
+  test-only.pokerstars-cash.btn-flop-cbet --json
+
+python -m rivermind_core gto-query pokerstars 100000000001 `
+  --before-action 5 `
+  --database data/dev.db `
+  --catalog solutions/catalog.test_only.json `
+  --rake-model pokerstars.cash.example `
+  --rake-percent 5 `
+  --rake-cap-bb 3 `
+  --combo AhKh `
+  --json
+
+# 独立质量门；仓库当前没有任何签署可以喂给它
+python -m rivermind_core gto-quality-verify grants/attestation.json `
+  --catalog solutions/catalog.json --json
+
+# 草稿制品规范化；--update-catalog 必须搭配 --write
+python -m rivermind_core gto-artifact-package draft.json `
+  --catalog solutions/catalog.json --write --update-catalog --json
 ```
 
-默认空目录返回 `unsupported/catalog_empty` 是正确行为。
+默认空目录返回 `unsupported/catalog_empty` 是正确行为。`gto-query` 只在 exact 命中且制品验证通过时返回频率与 EV；制品验证失败、签署未通过质量门或签署是为别的字节签发的都用退出码 2 报错，`approximate`、`unsupported` 和"组合未覆盖"则返回退出码 0 加结构化的"没有策略"。不带 `--attestation` 时仍会返回事实，但 `usable_for_teaching = false`。
+
+重新打包制品会作废既有签署：字节变了，`artifact_sha256` 就不再匹配，必须重新走质量门。
 
 ## 5. 仓库结构和工程约定
 
@@ -271,7 +393,7 @@ src/rivermind_core/   Python 领域核心、CLI、存储和服务边界
 tests/                unittest、黄金牌谱、合同与回归测试
 evals/                AI Coach 50 例离线评测语料
 benchmarks/           可重复的导入/查询/匹配基准
-solutions/            解法目录；当前只有空目录元数据
+solutions/            解法目录；默认目录为空，另有 test_only 制品切片；无签署与报告
 docs/                 产品、架构、协议和限制
 PROJECT_PLAN.md       长期计划；包含未完成的愿景项
 README.md             当前可用能力和快速开始
@@ -286,6 +408,7 @@ README.md             当前可用能力和快速开始
 - dataclass 多数使用 `frozen=True, slots=True`；
 - schema 版本是协议的一部分，不要静默改变旧版本语义；
 - 当前没有正式 CI workflow，只有 `docs/ci.example.yml`；
+- `.gitattributes` 强制 LF，并把哈希寻址的 `solutions/**/*.json` 与 `tests/fixtures/**` 标记为 `-text`；
 - `pyproject.toml` 包版本仍为 `0.1.0`。
 
 每次修改至少执行：
@@ -319,6 +442,10 @@ python benchmarks/import_benchmark.py --hands 10000
 8. 外部 LLM 调用必须显式授权，牌谱原文不能直接发送。
 9. 不开发或暗示实时牌桌辅助、自动操作、读屏或规避平台检测。
 10. 没有证据时失败关闭，不静默猜测。
+11. `strategy_content_verified=true` 只证明身份、完整性和内部一致性；只有 `usable_for_teaching=true`（标签是 `verified` **且**有通过质量门的签署）才允许把频率或 EV 展示给学习者。
+12. 不得为了“先跑通”而放宽或跳过 SHA-256、身份和内容校验；修改被哈希的制品必须同步更新目录里的 `sha256` 并重新签署。
+13. `verified` 只能由 loader 之外的质量门授予，且必须有来源、许可、收敛证据和至少两名签署人（其中一名独立复核）。任何代码路径都不得自行升级质量标签。
+14. 质量门里不要写"搜关键词"式的检查；用结构化字段与既有协议对象比对。
 
 ## 7. 当前已知缺口
 
@@ -340,12 +467,12 @@ python benchmarks/import_benchmark.py --hands 10000
 ### GTO 层
 
 - 没有求解器；
-- 没有真实策略制品；
-- 没有策略 artifact schema/loader/validator；
-- 没有概率、EV、范围、动作树内容校验；
+- 没有真实策略制品、求解质量报告或签署；仓库只有手写的 `test_only` 切片，`usable_for_teaching` 恒为 false；
+- 绝对收敛上限尚未经过真实解法校准；
+- 一个 artifact 只表达一个节点，没有动作树遍历和街道推进；
 - Matcher 当前线性扫描目录；
 - 公共牌必须逐张相同，尚未做 suit isomorphism；
-- 动作线必须完全相同，尚未做经过验证的 bet-size translation；
+- 动作线必须完全相同，尚未做经过验证的 bet-size translation；因此 `gto-query` 只接受 exact 命中；
 - 没有解法浏览器、矩阵、节点导航、训练题或 EV loss；
 - Leak Card 尚未自动定位“哪一个决策最值得送入 GTO Matcher”。
 
@@ -353,167 +480,206 @@ python benchmarks/import_benchmark.py --hands 10000
 
 - 没有真实外部模型调用结果；
 - 没有真实专家盲审评分；
-- 当前证据不包含经过验证的 GTO 策略事实；
+- `ExplanationEvidence` 尚未接入 `StrategyEvidence`；当前教练证据里没有任何 GTO 策略事实；
 - 对手建模尚未实现。
 
-## 8. 建议下一阶段：Strategy Artifact v0.1
+## 8. 已完成阶段
 
-下一步不要直接做漂亮的策略矩阵 UI。先让 `SolutionSpec.artifact_id` 和 `artifact_sha256` 对应一个真正可加载、可验证、可拒绝的策略制品。
+两个阶段已经交付，保留在此作为契约说明和验收记录。
 
-### 8.1 阶段目标
+### 8.1 Strategy Artifact v0.1
 
-建立 `strategy-artifact/1.0.0`，实现：
+实现见 `docs/STRATEGY_ARTIFACTS.md`。链路：
 
 ```text
 SolutionSpec
-  → 定位 artifact
+  → 在 catalog 目录沙箱内定位 artifact
   → 校验文件 SHA-256
-  → 校验 GameSpec 指纹和动作树版本
-  → 校验牌型/组合、动作和概率
-  → 校验 EV 单位与有限数值
+  → 校验 solution / GameSpec 指纹 / 动作树 / 求解器 / 质量标签
+  → 校验 action、私牌组合、概率、EV 单位与语义
+  → 校验 provenance
   → 产生只读 StrategyEvidence
-  → 后续才能进入 Study 或 AI Coach
 ```
 
-### 8.2 开工前必须冻结的问题
+冻结的答案：
 
-1. `artifact_id` 如何映射文件：相对 catalog 路径、对象存储 URI，还是独立 registry？
-2. artifact 的规范序列化格式：首版建议严格 JSON，后续再评估 Parquet/二进制矩阵。
-3. 一个 artifact 表达单节点还是一棵动作树？首版建议单节点纵向切片，降低验证面。
-4. 私牌策略按 1,326 个具体组合、169 类起手牌，还是带权 range 子集表达？翻后必须处理公共牌冲突。
-5. action ID 如何与动作树绑定？不能只用自由文本 `bet 50%`。
-6. 概率和 EV 的精度、舍入和容差是多少？必须版本化。
-7. EV 是相对当前决策、整手净 EV，还是从节点开始；单位是 BB、chips 或奖金价值？必须显式声明。
-8. 策略来源、求解器配置、迭代/收敛证据和许可证如何记录？
-9. `verified` 谁能授予、需要什么质量门？Matcher 不能自行升级质量标签。
+| 开工前的问题 | v0.1 结论 |
+|---|---|
+| `artifact_id` 如何映射文件 | catalog 目录为根的相对 POSIX 路径 + 目录沙箱 |
+| 序列化格式 | 严格 JSON、UTF-8、数值一律十进制字符串、2 空格缩进 + LF 的规范字节 |
+| 单节点还是动作树 | 单节点纵向切片 |
+| 私牌粒度 | 1,326 个具体组合，翻后校验公共牌冲突 |
+| action 绑定 | 节点显式声明 `action_id` + `kind` + `size_bb` |
+| 精度与容差 | 最多 6 位小数、18 位数字；单组合概率和容差 `0.00001` |
+| EV 语义与单位 | `action_ev_from_node`、`bb`，两者必填 |
+| 结构上限 | 每节点最多 64 个 action、1,326 个组合 |
 
-### 8.3 建议的最小数据边界
+### 8.2 Solve Quality Gate v0.1
 
-建议至少包括：
-
-- `schema_version`；
-- `solution_id`；
-- `game_spec_fingerprint`；
-- `action_tree_version`；
-- `node_id`；
-- 明确、唯一的 action 定义；
-- 私牌组合或 range entry；
-- 每个 entry 的动作概率；
-- 可选但强类型的 action EV；
-- EV 单位和语义；
-- provenance：求解器、版本、配置 ID、生成时间、质量报告 ID；
-- artifact 内容本身不循环包含自己的最终哈希，哈希由 `SolutionSpec`/manifest 持有。
-
-不要一开始把整个求解器内部状态、训练轨迹和 UI 聚合格式塞进同一个协议。
-
-### 8.4 验证器必须拒绝
-
-- 文件哈希与 `SolutionSpec.artifact_sha256` 不一致；
-- `solution_id`、`GameSpec` 指纹或动作树版本不一致；
-- 未知 schema 或未知字段；
-- 非法/重复私牌组合；
-- 私牌与公共牌冲突；
-- 未声明、重复或非法 action；
-- 概率不是有限数、超出 `[0,1]` 或合计不满足版本化容差；
-- EV 为 NaN/Infinity、单位缺失或语义不明；
-- provenance/质量标签缺失；
-- 测试数据冒充 `verified`；
-- artifact 引用越过允许目录或使用未授权远程位置。
-
-### 8.5 建议新增模块
-
-命名可以调整，但职责应保持分离：
+实现见 `docs/SOLVE_QUALITY_GATE.md`。链路：
 
 ```text
-src/rivermind_core/strategy_artifacts.py   # schema、严格 loader、hash 校验
-src/rivermind_core/strategy_query.py       # 从已验证 artifact 查询节点/组合
-tests/test_strategy_artifacts.py           # 合同和攻击性失败用例
-solutions/fixtures/                        # 仅 test_only，小而可人工核验
-docs/STRATEGY_ARTIFACTS.md                  # 协议、单位、质量和限制
+QualityAttestation
+  → 沙箱内定位并按字节校验 SolveQualityReport
+  → 用普通 loader 完整验证 StrategyArtifact
+  → 三方身份一致
+  → 收敛达到自己的门槛，且不超过策略绝对上限
+  → 许可允许展示、有独立复核
+  → rake 范围与 claim_class 与节点相符
+  → 双人签署、至少一名独立复核
+  → 时间顺序自洽
+  → usable_for_teaching = true
 ```
 
-建议增加 CLI：
+冻结的答案：
+
+| 开工前的问题 | v0.1 结论 |
+|---|---|
+| 来源与许可怎么记录 | `source`：origin、provider、license_id、obtained_at、display_allowed、redistribution_allowed |
+| 质量报告写什么 | 求解器身份与配置哈希、迭代数、收敛指标/值/单位/门槛、抽象、独立复核工具、结构化 rake 模型、至少一条显式限制 |
+| 谁能授予 `verified` | ≥2 名签署人、≥1 名 `independent_reviewer`；loader 永不授予 |
+| 动作树如何冻结 | 报告 / 制品 / 目录三方 `action_tree_version` 必须一致 |
+| 多人局质量怎么表述 | `claim_class`：两人 chip_ev 才可用 `equilibrium_approximation`，其余一律 `empirical_quality` |
+
+### 8.3 新增模块
 
 ```text
-rivermind gto-artifact-verify CATALOG SOLUTION_ID --json
-rivermind gto-query SITE HAND_ID --before-action N ... --json
+src/rivermind_core/_contracts.py           三协议共用的严格读取原语与路径沙箱
+src/rivermind_core/strategy_artifacts.py   制品 schema、严格 loader、规范序列化
+src/rivermind_core/strategy_query.py       只读 StrategyEvidence 与版本化加权汇总
+src/rivermind_core/solve_quality.py        求解质量报告协议与节点交叉校验
+src/rivermind_core/quality_gate.py         签署协议与独立 verified 授予门
+tests/test_strategy_artifacts.py           制品合同与攻击性失败用例
+tests/test_quality_gate.py                 质量门合同与攻击性失败用例
+solutions/catalog.test_only.json           链路 fixture 目录；正式目录仍为空
+solutions/fixtures/                        仅 test_only，小而可人工核验
+docs/STRATEGY_ARTIFACTS.md                 制品协议、单位、质量与限制
+docs/SOLVE_QUALITY_GATE.md                 报告协议、授予流程与策略上限
+.gitattributes                             保护哈希寻址文件的字节
 ```
 
-`gto-query` 只有在 Matcher 命中且 artifact 完整验证后才返回策略事实。否则维持现有 `unsupported` 边界。
+### 8.4 验收状态
 
-### 8.6 第一阶段测试与验收
+- 两套协议与质量边界都有文档；
+- loader 与质量门默认失败关闭，且互相独立；
+- 有 test-only 纵向切片，没有任何伪造 `verified` 数据，也没有任何签署；
+- CLI/API 能区分"元数据命中""策略内容已验证"和"质量已授予"三种状态；
+- 全部 206 项测试通过；基准新增制品验证、单节点查询和质量门耗时；
+- README、ARCHITECTURE、PROJECT_PLAN、GTO_MATCHER 与本文稿同步更新。
 
-至少包括：
+### 8.5 两轮对抗性审查修掉的问题
 
-- 一个极小、人工可核对的 `test_only` artifact 正向用例；
-- hash mismatch；
-- solution/game/tree identity mismatch；
-- 非法牌、重复牌、board blocker；
-- 缺 action、重复 action；
-- 概率小于 0、大于 1、不合计、NaN、Infinity；
-- EV 单位/语义缺失；
-- 路径穿越；
-- Matcher exact → artifact verify → query 的端到端测试；
-- `unsupported` 时绝不返回策略或 EV；
-- 基准记录加载和单节点查询耗时；
+记录在此，避免以后又被引入：
+
+- 40 位的 EV 会被 Python 默认 28 位十进制上下文静默取整，制品报出的数字不再是文件里的数字 → 加了 18 位数字上限和 96 位精度的汇总上下文；
+- 孤立代理码点（`\ud800`）能通过校验却在输出时崩溃 → 文本模式排除代理与 C1 控制字符；
+- 深层嵌套 JSON 抛 `RecursionError` 逃逸到 CLI → 三个协议和目录加载都按验证失败处理；
+- 重复 JSON 键"后者胜出"，同一份字节有两种读法 → 一律拒绝；
+- 汇总对 action 数是二次复杂度 → 改为按 `action_id` 索引的单遍累加，并加结构上限；
+- `gto-artifact-package` 能把制品写到 `catalog.json` 或签署过的报告上并抹掉它们 → 拒绝写目录文件本身、拒绝覆盖非本 solution 的既有 JSON、原子替换、写后立即复验；
+- rake 处理曾用"在 limits 里搜 rake 这个词"确认，一句"rake was ignored completely"就能满足 → 改成结构化 `solve.rake_model_id` 与节点 `RakeSpec` 比对；
+- `equilibrium_approximation` 可以搭配 `average_regret` 绕开 rake 责任 → 强断言必须使用均衡距离类指标；
+- 制品 `generated_at`、许可 `obtained_at` 和未来日期的授予都没有被排序检查 → 补齐完整时间约束；
+- 报告可以自己声明 `threshold = 999999` 然后"达标" → 加了策略层绝对上限；
+- 求解器可以把自己列为"独立复核工具"；两个只差大小写的 `reviewer_id` 算两个人 → 都已拒绝；
+- 一个目录里两个 solution 指向同一个 artifact 文件，重打包会静默破坏另一个 → `artifact_id` 在目录内必须唯一。
+
+## 9. 建议下一阶段：真实小规模解法接入
+
+协议和门都建好了，缺的是数据。这一步**必须由你提供外部输入**：仓库里不能凭空出现真实求解器输出，手写频率也绝不能标成 `verified`。
+
+### 9.1 阶段目标
+
+```text
+选定来源与许可
+  → 记录求解配置与动作树版本
+  → 导出为 strategy-artifact/1.0.0（必要时先写一个来源专用转换器）
+  → gto-artifact-package 规范化并登记 sha256
+  → 写 solve-quality-report/1.0.0
+  → 两人签署 quality-attestation/1.0.0
+  → gto-quality-verify 通过
+  → gto-query --attestation 首次返回 usable_for_teaching = true
+```
+
+### 9.2 开工前必须冻结的问题
+
+1. 首批解法的来源、许可条款和导出格式（求解器名称、版本、文件样例）？许可是否允许展示与再分发？
+2. 绝对收敛上限的三个数字是否符合你的质量标准？现在的值是保守起始值，没有真实校准。
+3. `independent_reviewer` 具体是谁？书面复核意见存放在哪里，`statement_sha256` 指向什么？
+4. 首批覆盖哪几个节点？建议先选一个 HU 或 6-max 高频翻牌节点，宁少勿多。
+5. 求解配置文件存放在哪里，`solver.config_sha256` 指向什么？
+6. 制品体积增长后是否需要索引或分片？8 MiB 上限何时提高、依据是什么？
+
+### 9.3 第一阶段测试与验收
+
+- 至少一个真实来源的制品通过完整 loader 与质量门；
+- 质量报告 ID 可以从制品追溯到具体求解配置与书面复核意见；
+- `gto-query --attestation` 对该节点返回 `usable_for_teaching = true`，对其余节点仍然失败关闭；
+- 缺质量报告、缺许可、缺独立复核或签署不足时必须被拒绝；
+- 记录制品加载、查询与质量门基准；
 - 全量旧测试继续通过。
 
-阶段完成定义：
+## 10. 之后的推荐顺序
 
-- artifact 协议和质量边界有文档；
-- 严格 loader 与 validator 默认失败关闭；
-- 有 test-only 纵向切片；
-- 没有任何伪造 `verified` 数据；
-- CLI/API 能区分“元数据命中”和“策略内容已验证”；
-- 测试、基准、README、ARCHITECTURE、PROJECT_PLAN 同步更新；
-- 提交并推送 GitHub `main`。
+1. **Catalog 索引**：按 GameSpec 指纹和硬维度建立索引，替代线性扫描，并保持完全相同的匹配结果。
+2. **Study v0.1**：策略矩阵、动作频率、EV 和节点元数据；只展示 `usable_for_teaching = true` 的内容。
+3. **Leak → Decision Router**：从证据手牌中选出可复盘决策，记录选择理由，不让 LLM 猜节点。
+4. **Practice v0.1**：由已授予策略生成题目、评分和复测；先做单节点，再做 Street/Full Hand。
+5. **牌面同构与动作翻译**：必须用单独版本化协议和回归集，不能混进 Matcher v1 的静默启发式；这也是放开 `gto-query` approximate 命中的前置条件。
+6. **真实 AI Coach 试验**：仅把 `usable_for_teaching = true` 的策略事实加入 `ExplanationEvidence`，先离线评测和专家盲审，再考虑默认开启。
+7. **H2N-lite 产品加固**：第二站点、导出/删除、All-in EV、百万手基准、正式 CI 和 Web UI。
 
-## 9. Strategy Artifact 之后的推荐顺序
-
-1. **真实小规模解法接入**：选择来源和许可明确的一小批 HU/6-max 高频节点，建立求解质量报告；不要先追求数量。
-2. **Catalog 索引**：按 GameSpec 指纹和硬维度建立索引，替代线性扫描，并保持完全相同的匹配结果。
-3. **Study v0.1**：策略矩阵、动作频率、EV 和节点元数据；所有展示值来自已验证 artifact。
-4. **Leak → Decision Router**：从证据手牌中选出可复盘决策，记录选择理由，不让 LLM 猜节点。
-5. **Practice v0.1**：由验证策略生成题目、评分和复测；先做单节点，再做 Street/Full Hand。
-6. **牌面同构与动作翻译**：必须用单独版本化协议和回归集，不能混进 Matcher v1 的静默启发式。
-7. **真实 AI Coach 试验**：仅把验证后的策略事实加入 `ExplanationEvidence`，先离线评测和专家盲审，再考虑默认开启。
-8. **H2N-lite 产品加固**：第二站点、导出/删除、All-in EV、百万手基准、正式 CI 和 Web UI。
-
-## 10. 容易踩的坑
+## 11. 容易踩的坑
 
 - `PROJECT_PLAN.md` 同时包含愿景和已完成项，不能把所有 P0/P1 描述当现状；
-- `SolutionQuality.VERIFIED` 目前只是可表达的枚举，不代表仓库已有 verified 解法；
+- `SolutionQuality.VERIFIED` 目前只是可表达的枚举，仓库没有任何 verified 解法，也没有任何签署；
 - `solution_reference_available=true` 不等于策略内容已验证；
-- 牌谱中的实际 rake 不是 rake schedule；
-- 当前 GameSpec 对动作线和牌面要求精确一致，不能擅自做“看起来差不多”的映射；
+- `strategy_content_verified=true` 也不等于策略可信；它只说明身份、完整性和内部一致性通过；
+- `quality = "verified"` 仍然不等于可教学；只有 `usable_for_teaching=true`（标签 + 通过门的签署）才允许展示给学习者；
+- 汇总视图只覆盖制品自带的组合，不是节点完整范围；各动作概率独立取整后之和可能与 1 差最后一位；
+- 牌谱中的实际 rake 不是 rake schedule；报告的 `solve.rake_model_id` 才是"这次求解建模了哪套抽水"；
+- 当前 GameSpec 对动作线和牌面要求精确一致，不能擅自做"看起来差不多"的映射；
 - 相同距离候选会返回 ambiguous，不要按 ID 顺序偷偷选择；
-- 多人局质量不能复用 HU exploitability 宣传；
+- 修改 `solutions/` 下任何被哈希的 JSON 后必须同步更新目录里的 `sha256`，并**重新签署**；
+- 不要移除 `.gitattributes` 里的 `-text` 规则，否则 Windows checkout 会改写行尾并破坏哈希；
+- 不要在质量门里加"搜关键词"式的检查；上一版的 rake 检查就是这样被一句"rake was ignored"绕过的；
+- 多人局质量不能复用 HU exploitability 宣传；协议层已经用 `claim_class` 挡住了，不要绕过；
 - 教练模板可以解释统计漏洞，但没有 GTO 证据时必须继续声明缺失；
 - 不要为了演示 UI 而在前端硬编码策略频率；
-- 不要提交数据库、私有牌谱、API key 或真实用户身份。
+- 不要提交数据库、私有牌谱、API key、签署文件或真实用户身份。
 
-## 11. 可直接交给 Claude 的起始任务
+## 12. 可直接交给 Claude 的起始任务
 
 可以把下面这段作为接手后的第一条指令：
 
 ```text
-请先阅读 README.md、docs/CLAUDE_HANDOFF.md、docs/ARCHITECTURE.md 和
-docs/GTO_MATCHER.md，并运行当前 81 项测试和 10,000 手牌基准。
+请先阅读 README.md、docs/CLAUDE_HANDOFF.md、docs/ARCHITECTURE.md、
+docs/GTO_MATCHER.md、docs/STRATEGY_ARTIFACTS.md 和 docs/SOLVE_QUALITY_GATE.md，
+并运行当前 206 项测试和 10,000 手牌基准。
 
 保持产品定位不变：H2N-lite 是入口，GTO + AI 教练是长期差异化；
 专用策略系统负责扑克策略，LLM 不得生成或补齐行动频率和 EV。
 
-下一阶段实现 Strategy Artifact v0.1：冻结严格、版本化的策略制品协议，
-实现本地安全 loader、SHA-256/身份/动作/牌型/概率/EV/provenance 校验，
-增加 test_only 纵向 fixture、gto-artifact-verify CLI，以及
-Matcher exact → artifact verify → query 的端到端测试。
+下一阶段做真实小规模解法接入。协议、严格 loader 和独立质量门都已就绪，
+缺的是外部数据：先和我确认来源、许可、求解配置、动作树版本、独立复核人
+和绝对收敛上限，再写来源专用转换器，把一小批节点走完
+package → report → attestation → gto-quality-verify 全链路。
 
-不要添加伪造 verified 解法，不要真实调用外部模型，不要做实时牌桌辅助。
-完成后运行全量测试和基准，更新 README/架构/项目计划，提交并推送 GitHub main。
+不要添加伪造 verified 解法或签署，不要真实调用外部模型，
+不要做实时牌桌辅助。完成后运行全量测试和基准，
+更新 README/架构/项目计划，提交并推送 GitHub main。
 ```
 
-## 12. 交接结论
+## 13. 交接结论
 
-当前项目已经完成了从牌谱导入、确定性统计、结算、Session、Leak Card、证据约束的 AI 解释，到 GTO 决策节点元数据匹配的完整工程骨架。
+当前项目已经完成了从牌谱导入、确定性统计、结算、Session、Leak Card、证据约束的 AI 解释，到 GTO 决策节点元数据匹配、可验证策略制品，再到独立质量授予门的完整工程骨架。
 
-最关键的下一步不是继续增加“看起来像 GTO”的页面，而是把策略内容变成一种可验证的工程制品。只有 Strategy Artifact 的身份、完整性、动作、概率、EV、来源和质量边界全部通过验证，RiverMind 才应把它展示给用户或交给 AI Coach 解释。
+三层边界现在是分开的、可分别拒绝的：
+
+1. **元数据命中** —— 目录里有这个节点；
+2. **内容已验证** —— 字节、身份和内部一致性都对；
+3. **质量已授予** —— 有来源、许可、收敛证据和两个人签字。
+
+只有第三层通过，数字才允许出现在学习者面前。任何一层失败，系统返回"没有策略"，而不是一个看起来合理的数字。
+
+最关键的下一步不是继续加协议或界面，而是让**第一批真实解法**带着来源、许可和求解质量报告走完这三层。在那之前，`usable_for_teaching` 应当始终为 false——而且现在，这不再是一句自律，是代码强制的。

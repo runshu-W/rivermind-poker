@@ -1,0 +1,121 @@
+{
+  "schema_version": "strategy-artifact/1.0.0",
+  "solution_id": "test-only.pokerstars-cash.btn-flop-cbet",
+  "game_spec_fingerprint": "85b7db3215c80f307bf4c745ab4a001b68f14ab3f0c938577b99e1c6bb469f55",
+  "action_tree_version": "rivermind.test-only.flop-cbet/0.0.1",
+  "node_id": "cash.hu.100bb.flop.btn-cbet-vs-bb-check",
+  "ev_unit": "bb",
+  "ev_semantics": "action_ev_from_node",
+  "actions": [
+    {
+      "action_id": "bet_2bb",
+      "kind": "bet",
+      "size_bb": "2"
+    },
+    {
+      "action_id": "bet_4_5bb",
+      "kind": "bet",
+      "size_bb": "4.5"
+    },
+    {
+      "action_id": "check",
+      "kind": "check",
+      "size_bb": null
+    }
+  ],
+  "entries": [
+    {
+      "combo": "8c8d",
+      "weight": "1",
+      "policies": [
+        {
+          "action_id": "bet_2bb",
+          "probability": "0.6",
+          "ev": "3.2"
+        },
+        {
+          "action_id": "bet_4_5bb",
+          "probability": "0.1",
+          "ev": "3.1"
+        },
+        {
+          "action_id": "check",
+          "probability": "0.3",
+          "ev": "2.9"
+        }
+      ]
+    },
+    {
+      "combo": "AhKh",
+      "weight": "1",
+      "policies": [
+        {
+          "action_id": "bet_2bb",
+          "probability": "0.5",
+          "ev": "2.5"
+        },
+        {
+          "action_id": "bet_4_5bb",
+          "probability": "0.25",
+          "ev": "2.4"
+        },
+        {
+          "action_id": "check",
+          "probability": "0.25",
+          "ev": "2.2"
+        }
+      ]
+    },
+    {
+      "combo": "AsKs",
+      "weight": "1",
+      "policies": [
+        {
+          "action_id": "bet_2bb",
+          "probability": "0.5",
+          "ev": "2.5"
+        },
+        {
+          "action_id": "bet_4_5bb",
+          "probability": "0.25",
+          "ev": "2.4"
+        },
+        {
+          "action_id": "check",
+          "probability": "0.25",
+          "ev": "2.2"
+        }
+      ]
+    },
+    {
+      "combo": "QcJc",
+      "weight": "0.5",
+      "policies": [
+        {
+          "action_id": "bet_2bb",
+          "probability": "0.4",
+          "ev": "1.9"
+        },
+        {
+          "action_id": "bet_4_5bb",
+          "probability": "0.35",
+          "ev": "2"
+        },
+        {
+          "action_id": "check",
+          "probability": "0.25",
+          "ev": "1.8"
+        }
+      ]
+    }
+  ],
+  "provenance": {
+    "solver_name": "rivermind.handwritten",
+    "solver_version": "0.0.0",
+    "solver_config_id": "handwritten-vertical-slice",
+    "generated_at": "2026-08-18T00:00:00Z",
+    "quality": "test_only",
+    "quality_report_id": null,
+    "license": "RiverMind test fixture. Handwritten numbers, not solver output."
+  }
+}

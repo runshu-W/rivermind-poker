@@ -1,0 +1,8 @@
+# Default: text files stay LF in the index and in the working tree, on every OS.
+* text=auto eol=lf
+
+# Overrides must come last. Strategy artifacts and golden hand histories are
+# addressed by the SHA-256 of their exact bytes, so no checkout may ever rewrite
+# their line endings.
+solutions/**/*.json -text
+tests/fixtures/** -text

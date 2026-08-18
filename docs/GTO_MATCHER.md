@@ -12,7 +12,7 @@ GTO Matcher 把数据库中的一手真实牌谱收紧为一个可复现的**决
 | `approximate` | 所有硬维度相同，数值差异均在公开阈值内，且最近候选唯一 |
 | `unsupported` | 目录为空、关键元数据缺失、硬维度不同、阈值越界或最佳候选并列 |
 
-`solution_reference_available=true` 仅表示命中了一个带制品标识和哈希的 `SolutionSpec`。它不代表 v0.1 已加载或验证制品内容。
+`solution_reference_available=true` 仅表示命中了一个带制品标识和哈希的 `SolutionSpec`。它不代表 Matcher 已加载或验证制品内容。加载与验证由 [STRATEGY_ARTIFACTS.md](STRATEGY_ARTIFACTS.md) 描述的 `gto-artifact-verify` / `gto-query` 负责。
 
 ## 版本化契约
 
@@ -84,9 +84,11 @@ python -m rivermind_core gto-match pokerstars 100000000001 `
 ## v0.1 限制与下一阶段
 
 - 公共牌与动作线尚未做经过验证的同构/动作翻译；不同即拒绝。
-- 未校验策略制品的内部 schema、概率和 EV 一致性。
 - 未生产现金或 MTT 的真实解法包。
 - 未将 Leak Card 的证据手牌自动路由到决策节点。
 - 未做策略矩阵、训练题或 EV loss。
+- 目录仍是线性扫描，尚未按指纹和硬维度建索引。
 
-下一阶段应先定义并验证策略制品协议，导入一小批可追溯解法；随后才能让 Matcher 的制品引用进入 Study/Practice，而不是由 LLM 补齐缺失数值。
+策略制品的内部 schema、概率与 EV 一致性已由 `strategy-artifact/1.0.0` 负责校验，见 [STRATEGY_ARTIFACTS.md](STRATEGY_ARTIFACTS.md)；`verified` 的授予流程见 [SOLVE_QUALITY_GATE.md](SOLVE_QUALITY_GATE.md)。注意 `gto-query` 目前**只接受 exact 命中**：approximate 只说明节点相近，把另一个节点的精确频率贴过来是错的，放宽需要单独版本化的 bet-size translation 协议。
+
+下一阶段是接入一小批来源与许可明确的真实解法并建立求解质量报告，而不是先做策略矩阵界面。

@@ -278,6 +278,12 @@ class SolutionCatalog:
         identifiers = [item.solution_id for item in self.solutions]
         if len(identifiers) != len(set(identifiers)):
             raise SpecValidationError("solution ids must be unique within a catalog")
+        artifacts = [item.artifact_id for item in self.solutions]
+        if len(artifacts) != len(set(artifacts)):
+            raise SpecValidationError(
+                "artifact ids must be unique within a catalog; two solutions sharing "
+                "one file cannot both stay valid when it is rewritten"
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -288,11 +294,23 @@ class SolutionCatalog:
         }
 
 
+#: Catalogs are metadata indexes, not data files.
+MAX_CATALOG_BYTES = 64 * 1024 * 1024
+
+
 def load_solution_catalog(path: Path) -> SolutionCatalog:
     try:
+        if path.stat().st_size > MAX_CATALOG_BYTES:
+            raise SpecValidationError(
+                f"solution catalog exceeds the {MAX_CATALOG_BYTES} byte limit"
+            )
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SpecValidationError(f"cannot load solution catalog: {exc}") from exc
+    except RecursionError as exc:
+        raise SpecValidationError(
+            "solution catalog JSON is nested too deeply to validate"
+        ) from exc
     if not isinstance(payload, dict):
         raise SpecValidationError("solution catalog root must be an object")
     return solution_catalog_from_dict(payload)

@@ -9,8 +9,9 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 ```
 
 - Beta：离线牌谱导入、标准化、Session 报告、固定核心统计、手牌回放、漏洞识别和证据约束的 AI 解释。
-- 当前 GTO 底座：从真实牌谱提取决策前节点，并对版本化解法目录返回精确、阈值内近似或不支持；尚未导入真实策略制品。
-- 下一阶段：验证首批策略制品，把高频错误映射到可追溯解法，形成 Study → Practice 闭环。
+- 当前 GTO 底座：从真实牌谱提取决策前节点，对版本化解法目录返回精确、阈值内近似或不支持；命中后再对策略制品做哈希、身份、动作、组合、概率、EV 和来源校验，全部通过才返回只读策略事实。
+- 质量边界：`verified` 只能由 loader 之外的独立质量门授予，需要求解质量报告、许可、收敛证据和至少两名签署人（其中一名独立复核）。
+- 下一阶段：接入一小批来源与许可明确的真实解法，让第一份制品真正通过这道门；随后把高频错误映射到可追溯解法，形成 Study → Practice 闭环。
 - 长期：预计算解法库、专用策略/价值网络、定制求解和教学 Bot。LLM 不直接决定扑克行动。
 
 ## 当前状态
@@ -36,8 +37,17 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 - 50 个不同证据、双专家评分、零 fatal error 的盲审质量门；当前尚未收集真实专家结果；
 - 默认报告仍使用确定性模板；所有自动化测试均为本地假传输，没有向第三方发送牌谱数据；
 - `GameSpec/SolutionSpec/SolutionCatalog` 严格版本契约、决策前节点指纹、精确/近似/不支持匹配和逐字段差异；
-- 默认解法目录为空，不包含伪造频率、EV 或“已验证”测试解法；
-- 81 项自动化测试、黄金集清单和含 1,000 节点匹配的可重复性能基准；
+- `strategy-artifact/1.0.0` 策略制品协议：单节点纵向切片、1,326 组合粒度、显式 action 定义、6 位小数版本化精度，以及必填的 EV 单位与语义；
+- 目录沙箱内的严格 loader：SHA-256 完整性、solution/GameSpec/动作树/求解器/质量标签一致性、路径穿越与符号链接拒绝、8 MiB 上限；
+- 组合、概率与 EV 内容校验：非法牌、重复牌、公共牌冲突、未声明或遗漏 action、概率越界或不合计、NaN/Infinity/浮点、精度与位数越界、重复 JSON 键、孤立代理码点、EV 部分声明一律失败关闭；
+- `strategy-evidence/1.0.0` 只读事实与 `strategy-aggregation/1.0.0` 加权汇总；
+- `solve-quality-report/1.0.0` 求解质量报告：来源与许可、求解配置、收敛指标与单位、评估范围、结构化 rake 模型和显式限制；
+- `quality-attestation/1.0.0` 与 `quality-gate-policy/1.0.0`：按字节钉死制品与报告、双人签署且至少一名独立复核、绝对收敛上限、完整时间顺序约束；
+- `usable_for_teaching` 需要同时满足“标签是 verified”和“存在通过质量门的签署”，否则输出 `teaching_block_reason`；
+- `claim_class` 强制区分两人零和均衡逼近与多人/ICM 经验质量，多人局无法冒用 exploitability 口径；
+- `gto-artifact-verify`、`gto-quality-verify`、`gto-artifact-package` 与 `gto-query` CLI，明确区分“元数据命中”“策略内容已验证”和“质量已授予”；
+- 默认解法目录为空，不包含伪造频率、EV 或“已验证”测试解法；仓库唯一的策略切片是手写、标记 `test_only` 的链路 fixture，且没有任何签署文件；
+- 206 项自动化测试、黄金集清单，以及含 1,000 节点匹配、制品验证、单节点查询和质量门耗时的可重复性能基准；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -64,6 +74,25 @@ python -m rivermind_core replay pokerstars 100000000001 --database data/dev.db -
 python -m rivermind_core gto-match pokerstars 100000000001 `
   --before-action 5 --database data/dev.db --catalog solutions/catalog.json `
   --rake-model pokerstars.cash.example --rake-percent 5 --rake-cap-bb 3 --json
+
+# 验证一个解法条目的策略制品（哈希、身份、动作、组合、概率、EV、来源）
+python -m rivermind_core gto-artifact-verify solutions/catalog.test_only.json `
+  test-only.pokerstars-cash.btn-flop-cbet --json
+
+# 独立质量门：只有它能授予 verified，仓库当前没有任何签署可以喂给它
+python -m rivermind_core gto-quality-verify grants/attestation.json `
+  --catalog solutions/catalog.json --json
+
+# 把草稿制品规范化成目录将要登记的字节
+python -m rivermind_core gto-artifact-package draft.json `
+  --catalog solutions/catalog.json --json
+
+# match → verify → query；未 exact 命中或制品未通过验证时不返回任何频率与 EV
+python -m rivermind_core gto-query pokerstars 100000000001 `
+  --before-action 5 --database data/dev.db `
+  --catalog solutions/catalog.test_only.json `
+  --rake-model pokerstars.cash.example --rake-percent 5 --rake-cap-bb 3 `
+  --combo AhKh --json
 
 # 生成第一个本地分析页面
 python -m rivermind_core report --database data/dev.db --output data/report.html
@@ -100,12 +129,12 @@ src/rivermind_core/      牌谱标准化与领域核心
 tests/                   黄金牌谱和单元测试
 evals/                   AI 教练合同与对抗性评测语料
 benchmarks/              可重复的导入性能基准
-solutions/               严格版本化解法目录；当前为空
+solutions/               严格版本化解法目录（默认为空）与 test_only 制品切片
 docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
-交接给下一位开发者或 AI 编程代理时，先阅读 [docs/CLAUDE_HANDOFF.md](docs/CLAUDE_HANDOFF.md)。导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)，GTO 节点、目录与匹配边界见 [docs/GTO_MATCHER.md](docs/GTO_MATCHER.md)。
+交接给下一位开发者或 AI 编程代理时，先阅读 [docs/CLAUDE_HANDOFF.md](docs/CLAUDE_HANDOFF.md)。导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)，GTO 节点、目录与匹配边界见 [docs/GTO_MATCHER.md](docs/GTO_MATCHER.md)，策略制品协议与验证规则见 [docs/STRATEGY_ARTIFACTS.md](docs/STRATEGY_ARTIFACTS.md)，求解质量报告与 `verified` 授予流程见 [docs/SOLVE_QUALITY_GATE.md](docs/SOLVE_QUALITY_GATE.md)。
 
 ## 产品边界
 

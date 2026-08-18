@@ -1,4 +1,4 @@
-# RiverMind 架构 v0.4
+# RiverMind 架构 v0.6
 
 ## 设计原则
 
@@ -27,7 +27,12 @@ flowchart LR
     NORM --> NODE["决策前 GameSpec"]
     NODE --> MATCH["GTO Matcher"]
     CAT["严格版本化 Solution Catalog"] --> MATCH
-    MATCH -->|"仅已验证策略事实；后续"| EVID
+    MATCH -->|"仅 exact 命中"| ART["Strategy Artifact 严格 loader"]
+    ART --> SEV["只读 StrategyEvidence"]
+    RPT["Solve Quality Report"] --> GATE["独立质量门（签署）"]
+    ART --> GATE
+    GATE -->|"授予 verified"| SEV
+    SEV -->|"仅 usable_for_teaching；后续"| EVID
 ```
 
 ## 第一阶段模块
@@ -50,11 +55,27 @@ flowchart LR
 | OpenAI Adapter | Responses API、严格 JSON Schema、拒绝/不完整处理 | v0.1 默认关闭；尚未真实调用 |
 | Coach Eval Gate | 候选 schema、证据、数值、隐私和行动攻击面回归 | 50 例全部通过；真实专家质量集待收集 |
 | Expert Review Gate | 盲化解释、双专家评分、不同证据数和 fatal error 门槛 | 工作流已实现；真实评分待收集 |
-| GTO Matcher | 真实决策节点提取；精确/阈值近似/不支持；差异说明 | 元数据 v0.1 已实现；策略制品尚未接入 |
+| GTO Matcher | 真实决策节点提取；精确/阈值近似/不支持；差异说明 | 元数据 v0.1 已实现 |
+| Strategy Artifact Loader | 目录沙箱定位、SHA-256、身份、动作/组合/概率/EV/来源校验 | v0.1 已实现；仓库仅有 test_only 切片 |
+| Strategy Query | 已验证制品的组合事实与版本化加权汇总 | v0.1 已实现；`usable_for_teaching` 恒为 false |
+| Solve Quality Report | 来源、许可、求解配置、收敛证据、评估范围与显式限制 | v0.1 已实现；仓库无报告 |
+| Quality Gate | 双人签署、字节钉死、收敛上限、claim_class 与 rake 范围 | v0.1 已实现；仓库无签署 |
 
 ## GTO 元数据边界
 
 `GameSpec` 不包含牌谱 ID 或玩家名，指纹由规范化 JSON 计算。`SolutionSpec` 只登记求解器、动作树、质量标签和制品哈希；Matcher 命中不等于策略内容已被加载。现金局缺 rake 结构、ICM/PKO 缺赛事上下文、硬维度不一致、阈值越界或最近候选并列时均失败关闭。完整契约与阈值见 [GTO_MATCHER.md](GTO_MATCHER.md)。
+
+## 策略制品边界
+
+`SolutionSpec` 命中只是元数据引用。策略内容必须再通过 `strategy-artifact/1.0.0` 的严格 loader：制品在 catalog 目录沙箱内定位（拒绝 `..`、绝对路径、符号链接和越界解析），按文件字节校验 SHA-256，并与目录条目逐项比对 `solution_id`、`GameSpec` 指纹、动作树版本、求解器身份和质量标签。内容层再校验 action 定义、1,326 粒度私牌组合、公共牌冲突、概率区间与合计容差、EV 单位与语义，以及完整 provenance。
+
+loader **不会**升级质量标签：目录说 `test_only`，制品也必须说 `test_only`。`gto-query` 只在 exact 命中且制品完整验证后返回频率与 EV；approximate、unsupported、制品未覆盖该组合或验证失败时一律不返回策略内容。完整契约见 [STRATEGY_ARTIFACTS.md](STRATEGY_ARTIFACTS.md)。
+
+## 质量授予边界
+
+`verified` 由一条与 loader 完全分离的路径授予：一份 `solve-quality-report/1.0.0`（来源、许可、求解配置、收敛证据、结构化 rake 模型、显式限制）加一份 `quality-attestation/1.0.0`（按字节钉死制品与报告，至少两名签署人，至少一名独立复核）。门另外强制绝对收敛上限、完整时间顺序，以及 `claim_class` 与牌局结构相符——多人局和 ICM/PKO 不能冒用两人零和的 exploitability 口径。
+
+`usable_for_teaching` 需要标签与签署同时成立。手工编辑的目录和制品可以互相同意 `verified`，但没有签署就教不了人。完整规则见 [SOLVE_QUALITY_GATE.md](SOLVE_QUALITY_GATE.md)。
 
 ## 当前存储边界
 
