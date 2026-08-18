@@ -15,6 +15,10 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from typing import Iterable
 
+from rivermind_core.board_isomorphism import (
+    BOARD_ISOMORPHISM_VERSION,
+    SuitPermutation,
+)
 from rivermind_core.gto_specs import SolutionQuality, SpecValidationError
 from rivermind_core.quality_gate import QualityAttestationVerification
 from rivermind_core.strategy_artifacts import (
@@ -104,6 +108,11 @@ class StrategyEvidence:
     provenance: ArtifactProvenance
     aggregation_policy_version: str | None
     attestation_id: str | None
+    #: Set when the solution was solved on a relabelled board. Combination
+    #: labels below are in the *observed* frame; this is how they were carried
+    #: across.
+    suit_permutation: SuitPermutation | None = None
+    solution_frame_combo: str | None = None
 
     @property
     def usable_for_teaching(self) -> bool:
@@ -128,7 +137,7 @@ class StrategyEvidence:
         return None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema_version": STRATEGY_EVIDENCE_SCHEMA_VERSION,
             "solution_id": self.solution_id,
             "node_id": self.node_id,
@@ -159,6 +168,18 @@ class StrategyEvidence:
                 "was generated, interpolated or completed by a language model."
             ),
         }
+        if self.suit_permutation is not None:
+            payload["board_isomorphism"] = {
+                "isomorphism_version": BOARD_ISOMORPHISM_VERSION,
+                "suit_permutation": self.suit_permutation.to_dict(),
+                "solution_frame_combo": self.solution_frame_combo,
+                "assumption": (
+                    "Relabelling suits is only sound if the solve's input ranges "
+                    "were suit symmetric. That is a property of the solve, not of "
+                    "the board; the solve quality report should state it."
+                ),
+            }
+        return payload
 
 
 def build_strategy_evidence(
@@ -166,16 +187,24 @@ def build_strategy_evidence(
     *,
     combo: str | None = None,
     attestation: QualityAttestationVerification | None = None,
+    suit_permutation: SuitPermutation | None = None,
 ) -> StrategyEvidence:
     """Return strategy evidence for one combination, or for the artifact's slice.
 
     Pass ``attestation`` only when the quality gate has already accepted a grant
     for these exact bytes; it is what unlocks ``usable_for_teaching``.
+
+    Pass ``suit_permutation`` when the match was isomorphic: ``combo`` is then
+    read in the *observed* hand's frame and carried into the solution's frame,
+    and the reported combination stays in the observed frame so the caller never
+    has to think in the solver's relabelling.
     """
 
     artifact = verification.artifact
     attestation_id = _checked_attestation_id(verification, attestation)
     covered_weight = _sum(item.weight for item in artifact.entries)
+    if suit_permutation is not None and suit_permutation.is_identity:
+        suit_permutation = None
     if combo is None:
         actions = _aggregate_actions(verification)
         return StrategyEvidence(
@@ -195,13 +224,21 @@ def build_strategy_evidence(
             provenance=artifact.provenance,
             aggregation_policy_version=AGGREGATION_POLICY_VERSION,
             attestation_id=attestation_id,
+            suit_permutation=suit_permutation,
         )
 
-    normalized = canonical_combo(combo)
+    observed_combo = canonical_combo(combo)
+    normalized = (
+        observed_combo
+        if suit_permutation is None
+        else suit_permutation.apply_combo(observed_combo)
+    )
     entry = artifact.entry_for(normalized)
     if entry is None:
         raise ComboNotCoveredError(
-            f"combo {normalized} is not present in artifact {artifact.solution_id!r}"
+            f"combo {observed_combo} is not present in artifact "
+            f"{artifact.solution_id!r}"
+            + ("" if suit_permutation is None else f" (as {normalized})")
         )
     actions = tuple(
         ActionFact(
@@ -222,7 +259,7 @@ def build_strategy_evidence(
         ev_unit=artifact.ev_unit,
         ev_semantics=artifact.ev_semantics,
         scope=EvidenceScope.COMBO,
-        combo=normalized,
+        combo=observed_combo,
         combo_weight=entry.weight,
         combo_count=len(artifact.entries),
         covered_weight=covered_weight,
@@ -230,6 +267,8 @@ def build_strategy_evidence(
         provenance=artifact.provenance,
         aggregation_policy_version=None,
         attestation_id=attestation_id,
+        suit_permutation=suit_permutation,
+        solution_frame_combo=None if suit_permutation is None else normalized,
     )
 
 

@@ -1,10 +1,10 @@
 # RiverMind Poker — Claude 工程交接文稿
 
 > 交接日期：2026-08-18
-> 最近更新：2026-08-18（Strategy Artifact v0.1 与 Solve Quality Gate v0.1 完成）
+> 最近更新：2026-08-18（Strategy Artifact、Solve Quality Gate、TexasSolver 接入、Catalog 索引、CI、Board Isomorphism 完成）
 > GitHub：https://github.com/runshu-W/rivermind-poker
 > 默认分支：`main`
-> 功能基线：`feat: add the independent verified quality gate`
+> 功能基线：`5919e00 feat: add verifiable strategy artifacts and an independent quality gate` 之后的 TexasSolver 接入
 > 运行环境：Windows PowerShell、Python 3.11+
 
 ## 1. 接手时先做什么
@@ -21,9 +21,9 @@ python benchmarks/import_benchmark.py --hands 10000
 
 交接时的预期基线：
 
-- 206 项自动化测试全部通过；
+- 276 项自动化测试全部通过（Python 3.11 / 3.12 / 3.13 均已验证）；
 - 10,000 手牌导入约 3.8 秒，机器差异允许结果浮动；
-- 1,000 个解法元数据线性匹配约 29 ms；
+- 1,000 个解法元数据：无索引单次匹配约 20–30 ms，预建索引后约 0.03 ms；
 - 单个 test_only 策略制品验证约 0.3 ms，单组合查询约 0.01 ms，完整质量门约 0.5 ms；
 - 工作树应为空；
 - GitHub `main` 应与本地 HEAD 一致。
@@ -313,6 +313,94 @@ loader 会拒绝：哈希不符、`solution_id`/`GameSpec` 指纹/动作树/求�
 
 **需要你确认的一件事：** 绝对收敛上限那三个数字（1 bb/100、0.01 bb、1% pot）是我给的保守起始值，没有经过真实解法校准。接入首批解法时应当重新评估，调整需要发新的 `quality-gate-policy` 版本并重新签署所有既有授予。
 
+### 3.9 TexasSolver 接入链路
+
+主要文件：
+
+- `src/rivermind_core/texassolver_import.py`
+- `docs/SOLVER_INGEST_TEXASSOLVER.md`
+- `tests/test_texassolver_import.py`
+
+已确认的 TexasSolver 事实（读源码得来，不是猜的）：
+
+- 树根是 OOP 的第一个翻后决策；**player 0 = IP，player 1 = OOP**（见 `src/tools/Rule.cpp`）；
+- `set_accuracy` 的单位是**底池百分比**：`total_exploitability = exploitable / player_number / initial_pot * 100`（见 `src/solver/BestResponse.cpp`）；
+- 范围记法只支持 `XY` / `XYs` / `XYo` 加可选 `:weight`，**不支持 `+`**；权重 ≤ 0.005 会被直接丢弃（见 `src/tools/PrivateRangeConverter.cpp`）；
+- `dump_result` **只导策略，不导 EV**；EV 只能从 GUI/API 拿。所以首批制品的 `ev` 全是 `null`；
+- 全下被写成 `BET <全部筹码>`，没有独立的 ALLIN 标签；
+- 组合拼写是 `AsAh` 这种，和协议要求的 `AhAs` 不同，必须重新规范化。
+
+转换器的边界：
+
+- 概率取整到 6 位小数后，把残差加到最大的那个动作上，确定性规则，结果精确等于 1；
+- 权重必须显式提供（`--range`）或显式声明按 1 处理（`--assume-uniform-weights`），不允许静默填 1；
+- 提供的范围与 dump 里的组合对不上就报错——说明范围贴错了；
+- **转换器永远不写 `verified`**。升级标签是一次刻意的手工编辑，然后才是质量门。
+
+已知协议缺口：**`GameSpec` 指纹不包含输入范围。** 同一节点用两套范围求解会得到指纹相同、内容不同的制品。兜底是 Matcher 对重复指纹返回 `ambiguous` 并失败关闭；真正钉死范围的是质量报告的 `solver.config_sha256`，所以**求解配置文件必须存档**。
+
+### 3.10 Catalog 索引 v0.1
+
+主要文件：
+
+- `src/rivermind_core/gto_index.py`
+- `tests/test_gto_index.py`
+
+问题不在「扫描」，在 `GameSpec.fingerprint`——它是 property，每次访问都重算一遍 SHA-256。1,000 节点的目录每次匹配要算 1,000 次哈希。
+
+`SolutionCatalogIndex` 构建时把指纹和硬维度键各算一次，之后匹配是两次字典查找：
+
+| 目录规模 | 无索引 | 有索引 | 构建 |
+|---:|---:|---:|---:|
+| 1,000 | 21.6 ms | 0.058 ms | 20 ms |
+| 20,000 | 455.2 ms | 0.126 ms | 422 ms |
+
+构建是一次性 O(n)，所以单次匹配不吃亏；价值在**重复匹配同一目录**（Study、Practice、整段 Session 复盘）。同一节点的不同筹码深度共享一个硬维度桶——筹码*数量*是数值维度，筹码*位置*才是硬维度。
+
+**索引只改变开销，不改变结论。** `tests/test_gto_index.py` 保留了索引化之前的线性实现作为可执行规格，用随机目录逐字节差分比对；对抗性审查另跑了约 48 万次比对，覆盖全部分支，无分歧。
+
+传入的索引必须来自同一个 catalog 对象，否则 `match_game_spec` 直接报错。
+
+顺带修掉的一个真问题：`GameSpec.to_dict` 里的 `_decimal_text` 原本用 `Decimal.normalize()`，它会按 **decimal 全局上下文**取整。这意味着节点指纹依赖解释器全局状态，而且长小数会被静默截断（`123456789012345678901234567890.5` 在默认 prec=28 下变成 `…567900`）。现在改成不依赖上下文的手工去尾零，指纹成为节点数据的纯函数。演示节点的指纹 `85b7db32…` 不变，有测试守住。
+
+### 3.11 Board Isomorphism v0.1
+
+主要文件：
+
+- `src/rivermind_core/board_isomorphism.py`
+- `docs/BOARD_ISOMORPHISM.md`
+- `tests/test_board_isomorphism.py`
+
+```text
+所有三张翻牌组合   22,100
+按牌面等价折叠后    1,755
+冗余倍数            12.6x
+```
+
+协议只承认两条互相独立的等价：**花色重标号**，以及**翻牌顺序**（三张同时亮出，没有行动能区分）。转牌和河牌不可重排。规范形式 = 24 种重标号里「翻牌排序后 + 转牌 + 河牌」的字典序最小值，排序必须在重标号之后做。翻前不折叠花色（`AhKh` 和 `AhKs` 不是同一手牌）。
+
+**默认关闭**，必须 `board_isomorphism=True` 或 CLI `--board-isomorphism` 显式打开。关闭时输出逐字节等于 `gto-match-policy/1.0.0`，有差分测试守着。
+
+新增状态 `isomorphic`，**不复用 `exact`**——任何检查 `status == "exact"` 的既有消费方在被刻意更新之前，对重标号牌面继续失败关闭。`exact` 优先；两个目录节点互为等价时返回 `ambiguous`。
+
+命中携带「观察牌面 → 解法牌面」的花色置换。查询时你问的组合在观察坐标系，返回的也在观察坐标系，另附 `solution_frame_combo` 供审计。索引的等价映射首次使用时才构建。
+
+**这条等价的前提**：花色重标号只在求解的**输入范围**也花色对称时成立。这是关于求解的假设，不是关于牌面的定理，代码无法检查（制品里没有输入范围），所以由报告承担，`StrategyEvidence` 会把这句话带出来。
+
+验证：全部 22,100 个翻牌穷举到 1,755 类并逐个验幂等；4,000 次随机重标号必须同类；2,000 次置换往返与 500 次逆元/复合律。
+
+### 3.12 CI
+
+`.github/workflows/ci.yml`：
+
+- `test`：**Linux + Windows × Python 3.11/3.12/3.13** 六个组合跑测试与 compileall。Windows 那一路是专门用来守住哈希寻址文件行尾的；
+- `benchmark`：小规模跑一遍基准，验证它还能执行、内部断言还成立（不做性能门，共享 runner 太吵）；
+- `guards`：仓库守卫。
+
+`tools/check_repository.py` 与 `tools/check_docs.py` 本地和 CI 共用。守卫内容：禁止提交数据库/私有牌谱/密钥/`verified` 制品与签署，`.gitattributes` 的 `-text` 规则必须还在，哈希寻址文件不得含 CRLF，默认目录必须为空，文档链接必须可解析。
+
+建 CI 时立刻抓到一个真问题：`test_rejects_json_nested_too_deeply` 在 3.12/3.13 上失败——CPython 3.12 提高了 json 的嵌套上限，3000 层不再抛 `RecursionError`。行为本身仍然失败关闭（文档被当成非对象拒绝），是测试写死了错误文案。已改成用 50,000 层（三个版本都稳定触发）并补一条浅层用例。
+
 ## 4. 当前 CLI
 
 入口：
@@ -338,6 +426,8 @@ python -m rivermind_core --help
 - `gto-artifact-verify`
 - `gto-quality-verify`
 - `gto-artifact-package`
+- `gto-catalog-add`
+- `gto-import-texassolver`
 - `gto-query`
 - `report`
 
@@ -407,7 +497,7 @@ README.md             当前可用能力和快速开始
 - 金额和关键协议数值使用 `Decimal`；
 - dataclass 多数使用 `frozen=True, slots=True`；
 - schema 版本是协议的一部分，不要静默改变旧版本语义；
-- 当前没有正式 CI workflow，只有 `docs/ci.example.yml`；
+- CI 在 `.github/workflows/ci.yml`：Linux + Windows × Python 3.11/3.12/3.13 跑测试与 compileall，另有基准与仓库守卫两个 job。Windows 那一路是专门用来守住哈希寻址文件行尾的；
 - `.gitattributes` 强制 LF，并把哈希寻址的 `solutions/**/*.json` 与 `tests/fixtures/**` 标记为 `-text`；
 - `pyproject.toml` 包版本仍为 `0.1.0`。
 
@@ -470,7 +560,7 @@ python benchmarks/import_benchmark.py --hands 10000
 - 没有真实策略制品、求解质量报告或签署；仓库只有手写的 `test_only` 切片，`usable_for_teaching` 恒为 false；
 - 绝对收敛上限尚未经过真实解法校准；
 - 一个 artifact 只表达一个节点，没有动作树遍历和街道推进；
-- Matcher 当前线性扫描目录；
+- 动作线必须完全一致，尚未做经过验证的 bet-size translation；这也是 `gto-query` 能否接受 approximate 命中的前置条件；
 - 公共牌必须逐张相同，尚未做 suit isomorphism；
 - 动作线必须完全相同，尚未做经过验证的 bet-size translation；因此 `gto-query` 只接受 exact 命中；
 - 没有解法浏览器、矩阵、节点导航、训练题或 EV loss；
@@ -564,7 +654,7 @@ docs/SOLVE_QUALITY_GATE.md                 报告协议、授予流程与策略�
 - loader 与质量门默认失败关闭，且互相独立；
 - 有 test-only 纵向切片，没有任何伪造 `verified` 数据，也没有任何签署；
 - CLI/API 能区分"元数据命中""策略内容已验证"和"质量已授予"三种状态；
-- 全部 206 项测试通过；基准新增制品验证、单节点查询和质量门耗时；
+- 全部 276 项测试通过；基准新增索引化匹配、制品验证、单节点查询和质量门耗时；
 - README、ARCHITECTURE、PROJECT_PLAN、GTO_MATCHER 与本文稿同步更新。
 
 ### 8.5 两轮对抗性审查修掉的问题
@@ -590,25 +680,33 @@ docs/SOLVE_QUALITY_GATE.md                 报告协议、授予流程与策略�
 
 ### 9.1 阶段目标
 
+来源已选定为 TexasSolver（AGPL v3，本地跑二进制），转换器和命令链都已就绪。剩下的全部是**需要人去做**的事：
+
 ```text
-选定来源与许可
-  → 记录求解配置与动作树版本
-  → 导出为 strategy-artifact/1.0.0（必要时先写一个来源专用转换器）
-  → gto-artifact-package 规范化并登记 sha256
-  → 写 solve-quality-report/1.0.0
-  → 两人签署 quality-attestation/1.0.0
-  → gto-quality-verify 通过
-  → gto-query --attestation 首次返回 usable_for_teaching = true
+[人] 决定 IP/OOP 输入范围并存档配置        ← 唯一的建模假设，牌谱推不出来
+[人] 跑一次求解，记下它打印的 exploitability
+gto-catalog-add          登记节点，哈希占位
+gto-import-texassolver   dump → 草稿制品
+gto-artifact-package     规范化、写入、登记真实哈希
+gto-artifact-verify      确认制品自洽（此时标签是 experimental）
+[人] 把标签改成 verified 并重新 package
+[人] 写 solve-quality-report/1.0.0
+[人] 独立复核人签署 quality-attestation/1.0.0
+gto-quality-verify       质量门
+gto-query --attestation  首次 usable_for_teaching = true
 ```
+
+操作细节见 `docs/SOLVER_INGEST_TEXASSOLVER.md`。
 
 ### 9.2 开工前必须冻结的问题
 
-1. 首批解法的来源、许可条款和导出格式（求解器名称、版本、文件样例）？许可是否允许展示与再分发？
-2. 绝对收敛上限的三个数字是否符合你的质量标准？现在的值是保守起始值，没有真实校准。
-3. `independent_reviewer` 具体是谁？书面复核意见存放在哪里，`statement_sha256` 指向什么？
-4. 首批覆盖哪几个节点？建议先选一个 HU 或 6-max 高频翻牌节点，宁少勿多。
-5. 求解配置文件存放在哪里，`solver.config_sha256` 指向什么？
-6. 制品体积增长后是否需要索引或分片？8 MiB 上限何时提高、依据是什么？
+1. ~~首批解法的来源与导出格式~~ → 已定：TexasSolver，本地跑二进制，AGPL v3。做成在线服务前必须重新评估许可。
+2. ~~首批覆盖哪个节点~~ → 已定：仓库 fixture 的 `before_action=5`，指纹 `85b7db32…`。
+3. **IP 与 OOP 的输入范围是什么？** 牌谱推不出来，这是纯建模假设，必须写明出处。
+4. 绝对收敛上限的三个数字是否符合你的质量标准？TexasSolver 的 `set_accuracy` 用底池百分比，策略上限是 1%。跑完第一次求解看它实际收敛到多少再定。
+5. `independent_reviewer` 具体是谁？书面复核意见存放在哪里，`statement_sha256` 指向什么？
+6. 求解配置文件存档在哪里，`solver.config_sha256` 指向什么？（这是唯一钉死输入范围的东西）
+7. 制品体积增长后是否需要索引或分片？8 MiB 上限何时提高、依据是什么？
 
 ### 9.3 第一阶段测试与验收
 
@@ -621,8 +719,9 @@ docs/SOLVE_QUALITY_GATE.md                 报告协议、授予流程与策略�
 
 ## 10. 之后的推荐顺序
 
-1. **Catalog 索引**：按 GameSpec 指纹和硬维度建立索引，替代线性扫描，并保持完全相同的匹配结果。
-2. **Study v0.1**：策略矩阵、动作频率、EV 和节点元数据；只展示 `usable_for_teaching = true` 的内容。
+1. ~~**Catalog 索引**~~ → 已完成，见 3.10。
+2. ~~**牌面同构**~~ → 已完成，见 3.11。剩下的是 **bet-size translation**：动作线仍要求完全一致，真实牌谱里 BTN 开 2.5bb 而解法是 3bb 就不匹配。同样需要单独版本化协议与回归集。
+3. **Study v0.1**：策略矩阵、动作频率、EV 和节点元数据；只展示 `usable_for_teaching = true` 的内容。
 3. **Leak → Decision Router**：从证据手牌中选出可复盘决策，记录选择理由，不让 LLM 猜节点。
 4. **Practice v0.1**：由已授予策略生成题目、评分和复测；先做单节点，再做 Street/Full Hand。
 5. **牌面同构与动作翻译**：必须用单独版本化协议和回归集，不能混进 Matcher v1 的静默启发式；这也是放开 `gto-query` approximate 命中的前置条件。
@@ -655,7 +754,7 @@ docs/SOLVE_QUALITY_GATE.md                 报告协议、授予流程与策略�
 ```text
 请先阅读 README.md、docs/CLAUDE_HANDOFF.md、docs/ARCHITECTURE.md、
 docs/GTO_MATCHER.md、docs/STRATEGY_ARTIFACTS.md 和 docs/SOLVE_QUALITY_GATE.md，
-并运行当前 206 项测试和 10,000 手牌基准。
+并运行当前 276 项测试和 10,000 手牌基准。
 
 保持产品定位不变：H2N-lite 是入口，GTO + AI 教练是长期差异化；
 专用策略系统负责扑克策略，LLM 不得生成或补齐行动频率和 EV。

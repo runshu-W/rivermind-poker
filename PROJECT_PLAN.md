@@ -732,7 +732,8 @@ H2N-lite 入口将首次可用时间提前到 **8–12 周**；GTO 闭环仍按 
 - [x] `strategy-artifact/1.0.0` 协议、沙箱化 loader、SHA-256/身份/动作/组合/概率/EV/来源校验 v0.1；
 - [x] `strategy-evidence/1.0.0` 只读事实、`strategy-aggregation/1.0.0` 加权汇总，以及 `gto-artifact-verify` / `gto-query` CLI；
 - [x] `solve-quality-report/1.0.0`、`quality-attestation/1.0.0` 与 `quality-gate-policy/1.0.0`：loader 之外的独立 `verified` 授予门、双人签署、字节钉死与 claim_class 约束；
-- 按 `GameSpec` 指纹与硬维度建立目录索引，替代线性扫描；
+- [x] 按 `GameSpec` 指纹与硬维度建立目录索引，替代线性扫描，匹配结论由差分测试保证不变；
+- [x] `board-isomorphism/1.0.0` 牌面等价协议：22,100 个翻牌折叠成 1,755 类，默认关闭且命中携带置换；
 - 策略矩阵、范围、EV/EQ 和节点导航；
 - Preflop/Spot/Street/Full Hand 训练；
 - Analyze → Study → Practice → 复测闭环。

@@ -41,8 +41,10 @@ from rivermind_core.gto_matcher import (
 )
 from rivermind_core.gto_specs import (
     RakeSpec,
+    SolutionCatalog,
     SolutionObjective,
     SolutionQuality,
+    SolutionSpec,
     SpecValidationError,
     load_solution_catalog,
 )
@@ -60,6 +62,10 @@ from rivermind_core.sessions import SessionSummary
 from rivermind_core.stats import METRIC_NAMES, PlayerStats, StatValue, StatsFilter
 from rivermind_core.storage import SQLiteHandStore
 from rivermind_core.quality_gate import verify_quality_attestation
+from rivermind_core.texassolver_import import (
+    convert_texassolver_dump,
+    parse_texassolver_range,
+)
 from rivermind_core.strategy_artifacts import (
     STRATEGY_ARTIFACT_SCHEMA_VERSION,
     ArtifactValidationError,
@@ -205,6 +211,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Match one real decision node to a versioned solution catalog",
     )
     _add_gto_node_arguments(gto_match_parser)
+    gto_match_parser.add_argument(
+        "--board-isomorphism",
+        action="store_true",
+        help="Accept a catalog node whose board is a relabelling of this one",
+    )
     _add_database_argument(gto_match_parser)
     gto_match_parser.add_argument("--json", action="store_true")
 
@@ -242,6 +253,64 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gto_artifact_package_parser.add_argument("--json", action="store_true")
 
+    gto_catalog_add_parser = subparsers.add_parser(
+        "gto-catalog-add",
+        help="Register a real decision node in a catalog with a placeholder hash",
+    )
+    _add_gto_node_arguments(gto_catalog_add_parser)
+    gto_catalog_add_parser.add_argument("--solution-id", required=True)
+    gto_catalog_add_parser.add_argument("--solver-name", required=True)
+    gto_catalog_add_parser.add_argument("--solver-version", required=True)
+    gto_catalog_add_parser.add_argument("--action-tree-version", required=True)
+    gto_catalog_add_parser.add_argument("--artifact-id", required=True)
+    gto_catalog_add_parser.add_argument(
+        "--quality",
+        choices=[
+            item.value for item in SolutionQuality if item is not SolutionQuality.VERIFIED
+        ],
+        default=SolutionQuality.EXPERIMENTAL.value,
+    )
+    _add_database_argument(gto_catalog_add_parser)
+    gto_catalog_add_parser.add_argument("--json", action="store_true")
+
+    texassolver_parser = subparsers.add_parser(
+        "gto-import-texassolver",
+        help="Convert a TexasSolver strategy dump into a strategy artifact draft",
+    )
+    texassolver_parser.add_argument("dump", type=Path)
+    texassolver_parser.add_argument("--catalog", type=Path, required=True)
+    texassolver_parser.add_argument("--solution-id", required=True)
+    texassolver_parser.add_argument(
+        "--node-path",
+        default="",
+        help="Comma-separated solver action labels from the dump root, e.g. CHECK",
+    )
+    texassolver_parser.add_argument("--node-id", required=True)
+    texassolver_parser.add_argument("--solver-version", required=True)
+    texassolver_parser.add_argument("--solver-config-id", required=True)
+    texassolver_parser.add_argument("--generated-at", required=True)
+    texassolver_parser.add_argument("--license", required=True)
+    texassolver_parser.add_argument(
+        "--quality",
+        choices=[
+            item.value for item in SolutionQuality if item is not SolutionQuality.VERIFIED
+        ],
+        default=SolutionQuality.EXPERIMENTAL.value,
+    )
+    texassolver_parser.add_argument("--quality-report-id")
+    weights = texassolver_parser.add_mutually_exclusive_group(required=True)
+    weights.add_argument(
+        "--range",
+        help="The range string this node's player was solved with; supplies weights",
+    )
+    weights.add_argument(
+        "--assume-uniform-weights",
+        action="store_true",
+        help="Accept weight 1 for every combination and declare it as an approximation",
+    )
+    texassolver_parser.add_argument("--out", type=Path)
+    texassolver_parser.add_argument("--json", action="store_true")
+
     gto_query_parser = subparsers.add_parser(
         "gto-query",
         help="Return verified strategy facts for one real decision node",
@@ -250,6 +319,11 @@ def build_parser() -> argparse.ArgumentParser:
     gto_query_parser.add_argument(
         "--combo",
         help="Canonical two-card combination such as AhKh; omit for the slice aggregate",
+    )
+    gto_query_parser.add_argument(
+        "--board-isomorphism",
+        action="store_true",
+        help="Accept a catalog node whose board is a relabelling of this one",
     )
     gto_query_parser.add_argument(
         "--attestation",
@@ -291,6 +365,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "gto-artifact-verify": _run_gto_artifact_verify,
         "gto-quality-verify": _run_gto_quality_verify,
         "gto-artifact-package": _run_gto_artifact_package,
+        "gto-catalog-add": _run_gto_catalog_add,
+        "gto-import-texassolver": _run_gto_import_texassolver,
         "gto-query": _run_gto_query,
         "report": _run_report,
     }
@@ -690,7 +766,9 @@ def _run_gto_match(args: argparse.Namespace) -> int:
     try:
         catalog = load_solution_catalog(args.catalog)
         observed = _observed_gto_node(args)
-        result = match_game_spec(observed, catalog)
+        result = match_game_spec(
+            observed, catalog, board_isomorphism=args.board_isomorphism
+        )
     except (OSError, SpecValidationError, ValueError) as exc:
         return _print_value_error(ValueError(str(exc)))
 
@@ -836,6 +914,164 @@ def _run_gto_quality_verify(args: argparse.Namespace) -> int:
         for limit in report.limits:
             print(f"! limit: {limit}")
     return 0
+
+
+PLACEHOLDER_SHA256 = "0" * 64
+
+
+def _run_gto_catalog_add(args: argparse.Namespace) -> int:
+    """Register a node so a solver export has something to be validated against.
+
+    The hash starts as a placeholder, so the entry fails verification until
+    ``gto-artifact-package --write --update-catalog`` records the real bytes.
+    """
+
+    if not _database_exists(args.database):
+        return 2
+    try:
+        observed = _observed_gto_node(args)
+        entry = SolutionSpec(
+            solution_id=args.solution_id,
+            game_spec=observed,
+            solver_name=args.solver_name,
+            solver_version=args.solver_version,
+            action_tree_version=args.action_tree_version,
+            quality=SolutionQuality(args.quality),
+            artifact_id=args.artifact_id,
+            artifact_sha256=PLACEHOLDER_SHA256,
+        )
+        if args.catalog.exists():
+            catalog = load_solution_catalog(args.catalog)
+            if any(item.solution_id == args.solution_id for item in catalog.solutions):
+                raise ValueError(
+                    f"catalog already contains solution {args.solution_id!r}"
+                )
+            merged = SolutionCatalog(
+                catalog_id=catalog.catalog_id,
+                catalog_version=catalog.catalog_version,
+                solutions=catalog.solutions + (entry,),
+            )
+        else:
+            merged = SolutionCatalog(
+                catalog_id="rivermind-local",
+                catalog_version="0.1.0",
+                solutions=(entry,),
+            )
+        _atomic_write(
+            args.catalog,
+            (json.dumps(merged.to_dict(), ensure_ascii=False, indent=2) + "\n").encode(
+                "utf-8"
+            ),
+        )
+    except (OSError, SpecValidationError, ValueError) as exc:
+        return _print_value_error(ValueError(str(exc)))
+
+    payload = {
+        "catalog": str(args.catalog),
+        "solution_id": args.solution_id,
+        "artifact_id": args.artifact_id,
+        "quality": args.quality,
+        "game_spec_fingerprint": observed.fingerprint,
+        "artifact_sha256": PLACEHOLDER_SHA256,
+        "solutions_in_catalog": len(merged.solutions),
+        "boundary": (
+            "The recorded hash is a placeholder. This entry will fail verification "
+            "until the real artifact is packaged into it."
+        ),
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(f"Registered {args.solution_id} in {args.catalog}")
+        print(f"GameSpec fingerprint: {observed.fingerprint}")
+        print(f"Artifact path: {args.artifact_id} (hash is a placeholder)")
+    return 0
+
+
+def _run_gto_import_texassolver(args: argparse.Namespace) -> int:
+    """Convert a TexasSolver dump into a draft artifact for this catalog entry."""
+
+    try:
+        catalog = load_solution_catalog(args.catalog)
+        solution = next(
+            (
+                item
+                for item in catalog.solutions
+                if item.solution_id == args.solution_id
+            ),
+            None,
+        )
+        if solution is None:
+            raise ValueError(
+                f"catalog does not contain solution {args.solution_id!r}; "
+                "register it with gto-catalog-add first"
+            )
+        dump = _READ_SOLVER_DUMP(args.dump)
+        node_path = tuple(
+            item.strip() for item in args.node_path.split(",") if item.strip()
+        )
+        range_weights = (
+            None
+            if args.range is None
+            else parse_texassolver_range(args.range, solution.game_spec.board)
+        )
+        converted = convert_texassolver_dump(
+            dump,
+            game_spec=solution.game_spec,
+            node_path=node_path,
+            solution_id=solution.solution_id,
+            action_tree_version=solution.action_tree_version,
+            node_id=args.node_id,
+            solver_version=args.solver_version,
+            solver_config_id=args.solver_config_id,
+            generated_at=args.generated_at,
+            license_text=args.license,
+            quality=SolutionQuality(args.quality),
+            quality_report_id=args.quality_report_id,
+            range_weights=range_weights,
+            assume_uniform_weights=args.assume_uniform_weights,
+            solver_name=solution.solver_name,
+        )
+        draft = json.dumps(converted.document, ensure_ascii=False, indent=2) + "\n"
+        if args.out is not None:
+            _atomic_write(args.out, draft.encode("utf-8"))
+    except (OSError, SpecValidationError, ValueError) as exc:
+        return _print_value_error(ValueError(str(exc)))
+
+    summary = converted.to_dict()
+    summary["out"] = None if args.out is None else str(args.out)
+    if args.out is None:
+        print(draft, end="")
+        return 0
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False))
+    else:
+        print(f"Wrote draft to {args.out}")
+        print(
+            f"Node player {converted.solver_player} "
+            f"({summary['solver_player_seat']}) · {converted.combo_count} combos · "
+            f"actions {list(converted.action_labels)}"
+        )
+        print(f"Weights: {converted.weights_source}")
+        print(
+            f"Largest renormalization applied: {summary['max_renormalization']}"
+        )
+        print(
+            "EV is absent: TexasSolver's dump_result carries strategy only. "
+            "State that in the solve quality report's limits."
+        )
+        if args.assume_uniform_weights:
+            print(
+                "Uniform weights assumed. If the solved range had fractional "
+                "weights, say so in the report's limits."
+            )
+    return 0
+
+
+def _READ_SOLVER_DUMP(path: Path):
+    """Read a solver dump with the artifact size limit and strict JSON rules."""
+
+    return load_artifact_document(path)
 
 
 def _run_gto_artifact_package(args: argparse.Namespace) -> int:
@@ -995,7 +1231,9 @@ def _run_gto_query(args: argparse.Namespace) -> int:
     try:
         catalog = load_solution_catalog(args.catalog)
         observed = _observed_gto_node(args)
-        match = match_game_spec(observed, catalog)
+        match = match_game_spec(
+            observed, catalog, board_isomorphism=args.board_isomorphism
+        )
     except (OSError, SpecValidationError, ValueError) as exc:
         return _print_value_error(ValueError(str(exc)))
 
@@ -1020,7 +1258,8 @@ def _run_gto_query(args: argparse.Namespace) -> int:
         ),
     }
 
-    if match.status is not MatchStatus.EXACT or match.solution is None:
+    usable = {MatchStatus.EXACT, MatchStatus.ISOMORPHIC}
+    if match.status not in usable or match.solution is None:
         payload["reason"] = (
             "match_not_exact"
             if match.status is MatchStatus.APPROXIMATE
@@ -1057,7 +1296,10 @@ def _run_gto_query(args: argparse.Namespace) -> int:
 
     try:
         evidence = build_strategy_evidence(
-            verification, combo=args.combo, attestation=attestation
+            verification,
+            combo=args.combo,
+            attestation=attestation,
+            suit_permutation=match.suit_permutation,
         )
     except ComboNotCoveredError as exc:
         payload["reason"] = "combo_not_covered"

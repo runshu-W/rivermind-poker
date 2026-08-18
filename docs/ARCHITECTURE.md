@@ -56,10 +56,13 @@ flowchart LR
 | Coach Eval Gate | 候选 schema、证据、数值、隐私和行动攻击面回归 | 50 例全部通过；真实专家质量集待收集 |
 | Expert Review Gate | 盲化解释、双专家评分、不同证据数和 fatal error 门槛 | 工作流已实现；真实评分待收集 |
 | GTO Matcher | 真实决策节点提取；精确/阈值近似/不支持；差异说明 | 元数据 v0.1 已实现 |
+| Catalog Index | 指纹与硬维度预计算；匹配降为字典查找，结论逐字节不变 | v0.1 已实现 |
+| Board Isomorphism | 花色重标号 + 翻牌顺序等价；默认关闭，命中携带置换 | v0.1 已实现 |
 | Strategy Artifact Loader | 目录沙箱定位、SHA-256、身份、动作/组合/概率/EV/来源校验 | v0.1 已实现；仓库仅有 test_only 切片 |
 | Strategy Query | 已验证制品的组合事实与版本化加权汇总 | v0.1 已实现；`usable_for_teaching` 恒为 false |
 | Solve Quality Report | 来源、许可、求解配置、收敛证据、评估范围与显式限制 | v0.1 已实现；仓库无报告 |
 | Quality Gate | 双人签署、字节钉死、收敛上限、claim_class 与 rake 范围 | v0.1 已实现；仓库无签署 |
+| TexasSolver Import | 节点定位、组合重规范化、概率重归一、范围权重 | v0.1 已实现；等待首份真实 dump |
 
 ## GTO 元数据边界
 

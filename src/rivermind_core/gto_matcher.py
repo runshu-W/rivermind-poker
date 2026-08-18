@@ -5,6 +5,12 @@ from decimal import Decimal
 from enum import StrEnum
 
 from rivermind_core.accounting import calculate_action_ledger
+from rivermind_core.board_isomorphism import (
+    BOARD_ISOMORPHISM_VERSION,
+    SuitPermutation,
+    canonical_board_fingerprint,
+    permutation_between,
+)
 from rivermind_core.gto_specs import (
     GameSpec,
     PositionAnte,
@@ -23,12 +29,17 @@ MATCH_POLICY_VERSION = "gto-match-policy/1.0.0"
 
 class MatchStatus(StrEnum):
     EXACT = "exact"
+    #: Identical to a catalog node up to board equivalence. Only reachable when
+    #: the caller opts in, so consumers checking for ``EXACT`` keep failing
+    #: closed on relabelled boards until they are updated deliberately.
+    ISOMORPHIC = "isomorphic"
     APPROXIMATE = "approximate"
     UNSUPPORTED = "unsupported"
 
 
 class MatchReason(StrEnum):
     EXACT_NODE = "exact_node"
+    ISOMORPHIC_NODE = "isomorphic_node"
     WITHIN_EXPLICIT_THRESHOLDS = "within_explicit_thresholds"
     CATALOG_EMPTY = "catalog_empty"
     MISSING_RAKE_METADATA = "missing_rake_metadata"
@@ -89,6 +100,9 @@ class GTOMatchResult:
     normalized_distance: Decimal | None = None
     differences: tuple[SpecDifference, ...] = ()
     candidate_solution_ids: tuple[str, ...] = ()
+    #: Present only for an isomorphic match: the relabelling that carries the
+    #: observed board's suits onto the solution's.
+    suit_permutation: "SuitPermutation | None" = None
 
     @property
     def solution_reference_available(self) -> bool:
@@ -111,7 +125,7 @@ class GTOMatchResult:
                 },
                 "game_spec_fingerprint": self.solution.game_spec.fingerprint,
             }
-        return {
+        payload: dict[str, object] = {
             "status": self.status.value,
             "reason": self.reason.value,
             "policy_version": self.policy_version,
@@ -130,6 +144,20 @@ class GTOMatchResult:
                 "strategy frequencies, actions, or EV."
             ),
         }
+        if self.suit_permutation is not None:
+            # Only present when board equivalence was actually used, so a
+            # default match still serializes exactly as gto-match-policy/1.0.0
+            # always did.
+            payload["board_isomorphism"] = {
+                "isomorphism_version": BOARD_ISOMORPHISM_VERSION,
+                "suit_permutation": self.suit_permutation.to_dict(),
+                "note": (
+                    "The solution was solved on a relabelled board. Combinations "
+                    "must be mapped through this permutation before they mean "
+                    "anything in the observed hand."
+                ),
+            }
+        return payload
 
 
 def extract_decision_game_spec(
@@ -241,7 +269,25 @@ def match_game_spec(
     catalog: SolutionCatalog,
     *,
     thresholds: MappingThresholds = MappingThresholds(),
+    index: "SolutionCatalogIndex | None" = None,
+    board_isomorphism: bool = False,
 ) -> GTOMatchResult:
+    """Map one observed node onto the catalog.
+
+    ``index`` is a pure optimization: pass a
+    :class:`~rivermind_core.gto_index.SolutionCatalogIndex` built from the same
+    catalog to skip rebuilding it on every call.  Results are identical either
+    way; a differential test enforces that.
+
+    ``board_isomorphism`` opts into ``board-isomorphism/1.0.0``: a node whose
+    board is a relabelling or reordering of a catalog node's board becomes an
+    :attr:`MatchStatus.ISOMORPHIC` hit carrying the suit permutation.  It is off
+    by default because a caller checking for ``EXACT`` should keep failing closed
+    on relabelled boards until it has been updated to apply that permutation.
+    With it off, every byte of this function's output is what
+    ``gto-match-policy/1.0.0`` always produced.
+    """
+
     common = {
         "observed_fingerprint": observed.fingerprint,
         "policy_version": MATCH_POLICY_VERSION,
@@ -259,11 +305,8 @@ def match_game_spec(
             **common,
         )
 
-    exact = [
-        solution
-        for solution in catalog.solutions
-        if solution.game_spec.fingerprint == observed.fingerprint
-    ]
+    index = _resolved_index(catalog, index)
+    exact = index.exact_matches(common["observed_fingerprint"])
     if len(exact) == 1:
         return GTOMatchResult(
             status=MatchStatus.EXACT,
@@ -280,53 +323,60 @@ def match_game_spec(
             **common,
         )
 
-    hard_scores = [
-        (solution, _hard_differences(observed, solution.game_spec))
-        for solution in catalog.solutions
-    ]
-    compatible = [solution for solution, differences in hard_scores if not differences]
+    if board_isomorphism:
+        equivalent = index.board_equivalent(canonical_board_fingerprint(observed))
+        if len(equivalent) == 1:
+            return GTOMatchResult(
+                status=MatchStatus.ISOMORPHIC,
+                reason=MatchReason.ISOMORPHIC_NODE,
+                solution=equivalent[0],
+                normalized_distance=Decimal("0"),
+                suit_permutation=permutation_between(
+                    observed, equivalent[0].game_spec
+                ),
+                **common,
+            )
+        if len(equivalent) > 1:
+            return GTOMatchResult(
+                status=MatchStatus.UNSUPPORTED,
+                reason=MatchReason.AMBIGUOUS_BEST_MATCH,
+                candidate_solution_ids=tuple(
+                    sorted(item.solution_id for item in equivalent)
+                ),
+                **common,
+            )
+
+    compatible = index.hard_compatible(observed)
     if not compatible:
-        fewest = min(len(differences) for _, differences in hard_scores)
-        nearest = [
-            (solution, differences)
-            for solution, differences in hard_scores
-            if len(differences) == fewest
-        ]
+        nearest = index.nearest_hard(observed)
         return GTOMatchResult(
             status=MatchStatus.UNSUPPORTED,
             reason=MatchReason.NO_HARD_COMPATIBLE_SOLUTION,
-            differences=nearest[0][1],
+            differences=_hard_differences(observed, nearest[0].game_spec),
             candidate_solution_ids=tuple(
-                sorted(solution.solution_id for solution, _ in nearest)
+                sorted(solution.solution_id for solution in nearest)
             ),
             **common,
         )
 
-    within: list[tuple[Decimal, SolutionSpec, tuple[SpecDifference, ...]]] = []
-    for solution in compatible:
-        differences, exceeded, distance = _numeric_differences(
-            observed,
-            solution.game_spec,
-            thresholds,
-        )
-        if not exceeded:
-            within.append((distance, solution, differences))
+    # One numeric pass over the compatible bucket; the original recomputed it.
+    scored = [
+        (solution, *_numeric_differences(observed, solution.game_spec, thresholds))
+        for solution in compatible
+    ]
+    within = [
+        (distance, solution, differences)
+        for solution, differences, exceeded, distance in scored
+        if not exceeded
+    ]
     if not within:
-        nearest = min(
-            compatible,
-            key=lambda item: _numeric_differences(
-                observed, item.game_spec, thresholds
-            )[2],
-        )
-        differences, _, distance = _numeric_differences(
-            observed, nearest.game_spec, thresholds
-        )
+        solution, differences, _, distance = min(scored, key=lambda item: item[3])
         return GTOMatchResult(
             status=MatchStatus.UNSUPPORTED,
             reason=MatchReason.THRESHOLDS_EXCEEDED,
             normalized_distance=distance,
             differences=differences,
-            candidate_solution_ids=(nearest.solution_id,),
+            candidate_solution_ids=(solution.solution_id,),
             **common,
         )
 
@@ -352,40 +402,66 @@ def match_game_spec(
     )
 
 
-def _hard_differences(
-    observed: GameSpec,
-    solution: GameSpec,
-) -> tuple[SpecDifference, ...]:
-    fields = (
-        ("game_type", observed.game_type, solution.game_type),
-        ("players_dealt", observed.players_dealt, solution.players_dealt),
-        ("objective", observed.objective, solution.objective),
-        (
-            "tournament_context_id",
-            observed.tournament_context_id,
-            solution.tournament_context_id,
-        ),
-        ("street", observed.street, solution.street),
-        ("board", observed.board, solution.board),
-        ("player_to_act", observed.player_to_act, solution.player_to_act),
-        ("active_positions", observed.active_positions, solution.active_positions),
-        (
-            "stack_positions",
-            tuple(item.position for item in observed.stacks),
-            tuple(item.position for item in solution.stacks),
-        ),
-        (
-            "ante_positions",
-            tuple(item.position for item in observed.antes),
-            tuple(item.position for item in solution.antes),
-        ),
-        ("action_history", observed.action_history, solution.action_history),
-        (
-            "rake_model",
-            None if observed.rake is None else observed.rake.model_id,
-            None if solution.rake is None else solution.rake.model_id,
-        ),
+def _resolved_index(
+    catalog: SolutionCatalog,
+    index: "SolutionCatalogIndex | None",
+) -> "SolutionCatalogIndex":
+    from rivermind_core.gto_index import SolutionCatalogIndex
+
+    if index is None:
+        return SolutionCatalogIndex(catalog)
+    if index.catalog is not catalog:
+        raise SpecValidationError(
+            "the supplied index was built for a different catalog object; "
+            "rebuild it rather than matching against stale keys"
+        )
+    return index
+
+
+#: The dimensions that must match exactly.  Order matters: it is the order the
+#: differences are reported in, and the index keys off the same tuple, so there
+#: is exactly one definition of "hard dimension" in the codebase.
+HARD_FIELD_NAMES = (
+    "game_type",
+    "players_dealt",
+    "objective",
+    "tournament_context_id",
+    "street",
+    "board",
+    "player_to_act",
+    "active_positions",
+    "stack_positions",
+    "ante_positions",
+    "action_history",
+    "rake_model",
+)
+
+
+def hard_key(spec: GameSpec) -> tuple[object, ...]:
+    """The hashable tuple of everything that must match exactly."""
+
+    return (
+        spec.game_type,
+        spec.players_dealt,
+        spec.objective,
+        spec.tournament_context_id,
+        spec.street,
+        spec.board,
+        spec.player_to_act,
+        spec.active_positions,
+        tuple(item.position for item in spec.stacks),
+        tuple(item.position for item in spec.antes),
+        spec.action_history,
+        None if spec.rake is None else spec.rake.model_id,
     )
+
+
+def hard_differences_from_keys(
+    observed: tuple[object, ...],
+    solution: tuple[object, ...],
+) -> tuple[SpecDifference, ...]:
+    """Report every hard dimension on which two keys disagree."""
+
     return tuple(
         SpecDifference(
             field=name,
@@ -394,9 +470,16 @@ def _hard_differences(
             absolute_delta=None,
             threshold=None,
         )
-        for name, left, right in fields
+        for name, left, right in zip(HARD_FIELD_NAMES, observed, solution, strict=True)
         if left != right
     )
+
+
+def _hard_differences(
+    observed: GameSpec,
+    solution: GameSpec,
+) -> tuple[SpecDifference, ...]:
+    return hard_differences_from_keys(hard_key(observed), hard_key(solution))
 
 
 def _numeric_differences(

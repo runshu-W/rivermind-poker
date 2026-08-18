@@ -568,10 +568,26 @@ class StrategyArtifactContractTest(unittest.TestCase):
             case.verify()
 
     def test_rejects_json_nested_too_deeply(self) -> None:
+        """CPython 3.12 raised json's nesting limit, so pick a depth past all of them.
+
+        The point of the test is that runaway nesting fails closed rather than
+        escaping as an unhandled RecursionError; the exact depth at which the
+        parser gives up is an interpreter detail.
+        """
+
         case = self._case()
-        case.artifact_path.write_bytes(b"[" * 3000 + b"]" * 3000)
+        case.artifact_path.write_bytes(b"[" * 50_000 + b"]" * 50_000)
         case.solution = _rehash(case)
-        with self.assertRaisesRegex(ArtifactValidationError, "nested too deeply|not valid JSON"):
+        with self.assertRaisesRegex(ArtifactValidationError, "nested too deeply"):
+            case.verify()
+
+    def test_rejects_shallower_nesting_that_the_parser_accepts(self) -> None:
+        """Below the recursion limit the document parses — and is still refused."""
+
+        case = self._case()
+        case.artifact_path.write_bytes(b"[" * 200 + b"]" * 200)
+        case.solution = _rehash(case)
+        with self.assertRaisesRegex(ArtifactValidationError, "must be an object"):
             case.verify()
 
     def test_rejects_probabilities_that_do_not_sum_to_one(self) -> None:

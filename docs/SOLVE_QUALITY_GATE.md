@@ -289,4 +289,4 @@ python -m rivermind_core gto-query pokerstars 100000000001 `
 3. `independent_reviewer` 具体是谁、书面意见存放在哪里；
 4. 首批覆盖哪几个节点（建议先选一个 HU 或 6-max 高频翻牌节点，宁少勿多）。
 
-拿到真实导出格式后，`gto-artifact-package` 前面再加一个来源专用的转换器即可；协议、门和 CLI 都不需要动。
+TexasSolver 的转换器已经写好了，见 [SOLVER_INGEST_TEXASSOLVER.md](SOLVER_INGEST_TEXASSOLVER.md)。换别的来源时只需再加一个同样形状的转换器；协议、门和 CLI 都不需要动。

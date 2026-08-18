@@ -470,10 +470,20 @@ def _canonical_json(payload: Mapping[str, object]) -> str:
 
 
 def _decimal_text(value: Decimal) -> str:
-    normalized = value.normalize()
-    if normalized == 0:
+    """Format without ``normalize()``.
+
+    ``normalize()`` rounds against the ambient decimal context, which would make
+    a published node fingerprint depend on global interpreter state rather than
+    on the node.  Stripping trailing zeros by hand keeps the hash a property of
+    the data alone.
+    """
+
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if text in {"", "-", "-0"}:
         return "0"
-    return format(normalized, "f")
+    return text
 
 
 def _validate_decimal(

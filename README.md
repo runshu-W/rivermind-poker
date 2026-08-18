@@ -46,8 +46,14 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 - `usable_for_teaching` 需要同时满足“标签是 verified”和“存在通过质量门的签署”，否则输出 `teaching_block_reason`；
 - `claim_class` 强制区分两人零和均衡逼近与多人/ICM 经验质量，多人局无法冒用 exploitability 口径；
 - `gto-artifact-verify`、`gto-quality-verify`、`gto-artifact-package` 与 `gto-query` CLI，明确区分“元数据命中”“策略内容已验证”和“质量已授予”；
+- TexasSolver 导出转换器：节点定位、组合重规范化、概率取整与重归一、全下识别、范围权重解析；权重必须显式提供或显式声明按 1 处理，转换器永不写 `verified`；
+- `gto-catalog-add` 与 `gto-import-texassolver`，把「牌谱节点 → 求解 → 制品」这条路做成可重复的命令链；
 - 默认解法目录为空，不包含伪造频率、EV 或“已验证”测试解法；仓库唯一的策略切片是手写、标记 `test_only` 的链路 fixture，且没有任何签署文件；
-- 206 项自动化测试、黄金集清单，以及含 1,000 节点匹配、制品验证、单节点查询和质量门耗时的可重复性能基准；
+- 目录索引：指纹与硬维度预计算，1,000 节点单次匹配从 21.6 ms 降到 0.058 ms、20,000 节点从 455 ms 降到 0.13 ms，匹配结论逐字节不变并由差分测试守住；
+- 节点指纹不再依赖 `decimal` 全局上下文，同一个节点在任何环境下算出同一个哈希；
+- `board-isomorphism/1.0.0` 牌面等价：花色重标号 + 翻牌顺序，22,100 个翻牌折叠成 1,755 类（12.6 倍冗余）；默认关闭，新增 `isomorphic` 状态而非复用 `exact`，命中携带可审计的花色置换；
+- Linux + Windows × Python 3.11/3.12/3.13 的 CI，外加基准与仓库守卫（禁止提交数据库、私有牌谱、密钥、verified 制品，并守住哈希寻址文件的行尾）；
+- 276 项自动化测试、黄金集清单，以及含 1,000 节点匹配与索引化匹配、制品验证、单节点查询和质量门耗时的可重复性能基准；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -101,9 +107,12 @@ python -m rivermind_core report --database data/dev.db --output data/report.html
 python -m rivermind_core stats --database data/dev.db --game-type tournament `
   --position UTG HJ --min-effective-stack-bb 40 --max-effective-stack-bb 80
 
-# 运行测试
+# 运行测试与仓库守卫（CI 跑的就是这几条）
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
+python -m compileall -q src benchmarks tests
+python tools/check_repository.py
+python tools/check_docs.py
 ```
 
 机器可读导入报告：
@@ -129,12 +138,13 @@ src/rivermind_core/      牌谱标准化与领域核心
 tests/                   黄金牌谱和单元测试
 evals/                   AI 教练合同与对抗性评测语料
 benchmarks/              可重复的导入性能基准
+tools/                   仓库守卫与文档链接检查（CI 与本地共用）
 solutions/               严格版本化解法目录（默认为空）与 test_only 制品切片
 docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
-交接给下一位开发者或 AI 编程代理时，先阅读 [docs/CLAUDE_HANDOFF.md](docs/CLAUDE_HANDOFF.md)。导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)，GTO 节点、目录与匹配边界见 [docs/GTO_MATCHER.md](docs/GTO_MATCHER.md)，策略制品协议与验证规则见 [docs/STRATEGY_ARTIFACTS.md](docs/STRATEGY_ARTIFACTS.md)，求解质量报告与 `verified` 授予流程见 [docs/SOLVE_QUALITY_GATE.md](docs/SOLVE_QUALITY_GATE.md)。
+交接给下一位开发者或 AI 编程代理时，先阅读 [docs/CLAUDE_HANDOFF.md](docs/CLAUDE_HANDOFF.md)。导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)，GTO 节点、目录与匹配边界见 [docs/GTO_MATCHER.md](docs/GTO_MATCHER.md)，策略制品协议与验证规则见 [docs/STRATEGY_ARTIFACTS.md](docs/STRATEGY_ARTIFACTS.md)，求解质量报告与 `verified` 授予流程见 [docs/SOLVE_QUALITY_GATE.md](docs/SOLVE_QUALITY_GATE.md)，首批真实解法的接入操作见 [docs/SOLVER_INGEST_TEXASSOLVER.md](docs/SOLVER_INGEST_TEXASSOLVER.md)，牌面等价协议见 [docs/BOARD_ISOMORPHISM.md](docs/BOARD_ISOMORPHISM.md)。
 
 ## 产品边界
 

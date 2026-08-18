@@ -10,6 +10,7 @@ GTO Matcher 把数据库中的一手真实牌谱收紧为一个可复现的**决
 |---|---|
 | `exact` | `GameSpec` 的规范化 SHA-256 指纹完全相同，且唯一命中 |
 | `approximate` | 所有硬维度相同，数值差异均在公开阈值内，且最近候选唯一 |
+| `isomorphic` | 除牌面写法（花色重标号或翻牌顺序）外完全相同；**默认关闭**，见 [BOARD_ISOMORPHISM.md](BOARD_ISOMORPHISM.md) |
 | `unsupported` | 目录为空、关键元数据缺失、硬维度不同、阈值越界或最佳候选并列 |
 
 `solution_reference_available=true` 仅表示命中了一个带制品标识和哈希的 `SolutionSpec`。它不代表 Matcher 已加载或验证制品内容。加载与验证由 [STRATEGY_ARTIFACTS.md](STRATEGY_ARTIFACTS.md) 描述的 `gto-artifact-verify` / `gto-query` 负责。
@@ -60,6 +61,28 @@ v0.1 的默认数值阈值：
 
 近似结果会列出每个非零差异、实际值、解法值、绝对差和阈值。超过任一阈值即拒绝。多个候选具有相同最小归一化距离时也拒绝，避免用 solution ID 顺序悄悄决定策略来源。
 
+## 目录索引
+
+`match_game_spec` 原本每次调用都线性扫描整个目录。真正的开销不是扫描，而是 `GameSpec.fingerprint`——它是一个 property，每次访问都重新对规范化 JSON 算一遍 SHA-256。1,000 个节点的目录因此每次匹配要算 1,000 次哈希。
+
+`SolutionCatalogIndex` 在构建时把每个解法的指纹和硬维度键各算一次，之后匹配就是两次字典查找：
+
+| 目录规模 | 单次匹配（无索引） | 单次匹配（有索引） | 索引构建 |
+|---:|---:|---:|---:|
+| 1,000 | 21.6 ms | 0.058 ms | 20 ms |
+| 4,000 | 79.0 ms | 0.113 ms | 80 ms |
+| 20,000 | 455.2 ms | 0.126 ms | 422 ms |
+
+索引构建是一次性的 O(n)，所以单次匹配不吃亏，**重复匹配同一个目录**才是它存在的理由——Study、Practice 和整段 Session 的复盘都是这个形状。
+
+按硬维度分桶还有一个现实收益：**同一个节点的不同筹码深度共享一个桶**（筹码*数量*是数值维度，筹码*位置*才是硬维度）。20 个深度的目录只有 1 个桶。
+
+最坏情况是每个解法都有独立硬维度键、且查询完全不命中：此时 `nearest_hard` 要扫过所有不同的桶。20,000 个全异节点实测 19 ms——仍然比 455 ms 快，因为比的是 12 元组而不是重算哈希。
+
+**索引只改变开销，不改变结论。** 每一条排序和并列规则都被保留，包括「完全不命中时报告哪一个解法的差异」。`tests/test_gto_index.py` 里保留了一份索引化之前的线性实现作为规格，并用随机目录做差分测试，逐字节比对两者的输出；对抗性审查跑了约 48 万次比对，覆盖全部分支，没有发现分歧。
+
+传入的索引必须来自同一个 catalog 对象，否则 `match_game_spec` 直接报错，不会拿过期的键去匹配。
+
 ## CLI
 
 先导入牌谱，再定位回放中的决策序号：
@@ -87,7 +110,7 @@ python -m rivermind_core gto-match pokerstars 100000000001 `
 - 未生产现金或 MTT 的真实解法包。
 - 未将 Leak Card 的证据手牌自动路由到决策节点。
 - 未做策略矩阵、训练题或 EV loss。
-- 目录仍是线性扫描，尚未按指纹和硬维度建索引。
+- 动作线必须完全一致，尚未做经过验证的 bet-size translation。
 
 策略制品的内部 schema、概率与 EV 一致性已由 `strategy-artifact/1.0.0` 负责校验，见 [STRATEGY_ARTIFACTS.md](STRATEGY_ARTIFACTS.md)；`verified` 的授予流程见 [SOLVE_QUALITY_GATE.md](SOLVE_QUALITY_GATE.md)。注意 `gto-query` 目前**只接受 exact 命中**：approximate 只说明节点相近，把另一个节点的精确频率贴过来是错的，放宽需要单独版本化的 bet-size translation 协议。
 

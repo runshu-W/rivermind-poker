@@ -18,6 +18,7 @@ sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 from rivermind_core.importer import HandHistoryImporter  # noqa: E402
 from rivermind_core.coach import explain_leak_report  # noqa: E402
 from rivermind_core.coach_evals import run_coach_eval  # noqa: E402
+from rivermind_core.gto_index import SolutionCatalogIndex  # noqa: E402
 from rivermind_core.gto_matcher import (  # noqa: E402
     MatchStatus,
     extract_decision_game_spec,
@@ -53,6 +54,7 @@ STRATEGY_CATALOG = PROJECT_ROOT / "solutions" / "catalog.test_only.json"
 STRATEGY_SOLUTION_ID = "test-only.pokerstars-cash.btn-flop-cbet"
 STRATEGY_ITERATIONS = 200
 GATE_ITERATIONS = 100
+MATCH_ITERATIONS = 200
 
 
 def _build_grant(root: Path, node) -> tuple[Path, Path]:
@@ -302,6 +304,20 @@ def main() -> int:
             match = match_game_spec(benchmark_node, catalog)
             match_elapsed = time.perf_counter() - match_started
 
+            # The same catalog, indexed once and reused: the shape every batch
+            # workload has.
+            index_started = time.perf_counter()
+            catalog_index = SolutionCatalogIndex(catalog)
+            index_build_elapsed = time.perf_counter() - index_started
+            indexed_started = time.perf_counter()
+            for _ in range(MATCH_ITERATIONS):
+                indexed_match = match_game_spec(
+                    benchmark_node, catalog, index=catalog_index
+                )
+            indexed_elapsed = (
+                time.perf_counter() - indexed_started
+            ) / MATCH_ITERATIONS
+
         # Strategy artifacts are read from disk, so time them outside the store.
         strategy_catalog = load_solution_catalog(STRATEGY_CATALOG)
         verify_started = time.perf_counter()
@@ -346,6 +362,8 @@ def main() -> int:
             raise RuntimeError("Coach candidate eval gate did not pass all 50 cases")
         if match.status != MatchStatus.EXACT:
             raise RuntimeError("GTO matcher benchmark did not find the exact node")
+        if indexed_match.to_dict() != match.to_dict():
+            raise RuntimeError("The index changed the matcher's answer")
         if verification.quality != SolutionQuality.TEST_ONLY:
             raise RuntimeError("The committed strategy artifact must stay test_only")
         if evidence.usable_for_teaching:
@@ -368,6 +386,9 @@ def main() -> int:
             "coach_eval_50_elapsed_seconds": round(coach_eval_elapsed, 3),
             "gto_catalog_nodes": catalog_nodes,
             "gto_match_elapsed_ms": round(match_elapsed * 1000, 3),
+            "gto_index_build_ms": round(index_build_elapsed * 1000, 3),
+            "gto_index_hard_buckets": catalog_index.distinct_hard_keys,
+            "gto_match_indexed_ms": round(indexed_elapsed * 1000, 4),
             "strategy_artifact_verify_ms": round(verify_elapsed * 1000, 4),
             "strategy_combo_query_ms": round(query_elapsed * 1000, 4),
             "strategy_artifact_combos": len(verification.artifact.entries),
