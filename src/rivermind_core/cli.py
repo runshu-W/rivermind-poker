@@ -13,6 +13,10 @@ from rivermind_core.coach import (
     coach_report_to_dict,
     explain_leak_report,
 )
+from rivermind_core.coach_evals import (
+    coach_eval_report_to_dict,
+    run_coach_eval,
+)
 from rivermind_core.html_report import render_analysis_page
 from rivermind_core.importer import HandHistoryImporter, ImportBatchReport
 from rivermind_core.leaks import LeakAssessment, LeakReport, LeakStatus
@@ -64,6 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dimension_arguments(coach_parser)
     coach_parser.add_argument("--evidence-limit", type=int, default=5)
     coach_parser.add_argument("--json", action="store_true")
+
+    coach_eval_parser = subparsers.add_parser(
+        "coach-eval", help="Run the offline candidate contract and adversarial corpus"
+    )
+    coach_eval_parser.add_argument(
+        "--corpus",
+        type=Path,
+        default=Path("evals/coach_candidate_cases.json"),
+    )
+    coach_eval_parser.add_argument("--json", action="store_true")
 
     sessions_parser = subparsers.add_parser(
         "sessions", help="Summarize cash sessions and tournaments"
@@ -124,6 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "stats": _run_stats,
         "leaks": _run_leaks,
         "coach": _run_coach,
+        "coach-eval": _run_coach_eval,
         "sessions": _run_sessions,
         "hands": _run_hands,
         "replay": _run_replay,
@@ -229,6 +244,31 @@ def _run_coach(args: argparse.Namespace) -> int:
     else:
         _print_coach(report)
     return 0
+
+
+def _run_coach_eval(args: argparse.Namespace) -> int:
+    try:
+        report = run_coach_eval(args.corpus)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(coach_eval_report_to_dict(report), ensure_ascii=False))
+    else:
+        print(
+            f"Coach candidate eval: {report.passed}/{report.total} passed, "
+            f"{report.failed} failed"
+        )
+        for category, counts in report.categories.items():
+            print(f"- {category}: {counts['passed']}/{counts['total']}")
+        for item in report.results:
+            if not item.passed:
+                print(
+                    f"- FAIL {item.case_id}: expected {item.expected_status} "
+                    f"{list(item.expected_issue_codes)}, got {item.actual_status} "
+                    f"{list(item.actual_issue_codes)}"
+                )
+    return 0 if report.failed == 0 else 2
 
 
 def _run_sessions(args: argparse.Namespace) -> int:

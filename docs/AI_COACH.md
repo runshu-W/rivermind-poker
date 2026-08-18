@@ -2,13 +2,16 @@
 
 ## 当前交付
 
-AI Coach v0.1 完成了模型无关的安全解释层：
+AI Coach v0.2 完成了模型无关的安全解释层和调用边界：
 
 1. 把 `LeakCard` 转换为脱敏、可哈希的 `ExplanationEvidence`；
 2. 为每张卡生成确定性中文解释和复习任务；
 3. 定义候选 LLM JSON schema 和 `{{fact_id}}` 引用规则；
 4. 校验 schema、证据身份、证据哈希、数值、引用、隐私和直接行动指令；
-5. 校验失败时保留问题代码并回退到确定性模板。
+5. 校验失败时保留问题代码并回退到确定性模板；
+6. 用 50 例合同/对抗性语料持续回归候选校验器；
+7. 提供带超时、重试、输入/输出上限和费用预算的异步 Provider 接口；
+8. 生成不含输入输出正文和原始牌局标识的调用审计。
 
 当前版本没有调用任何外部 LLM，也不会发送用户数据。`coach --json` 输出的 `model_input` 是后续模型连接器唯一允许发送的子对象。
 
@@ -74,6 +77,8 @@ AI Coach v0.1 完成了模型无关的安全解释层：
 
 这套规则能保证结构、证据身份、数值和已知敏感边界；它不能证明任意自由文本的全部扑克因果关系正确。接入外部模型前还需要受控提示词、语义支持度校验器和专家黄金解释集。
 
+Provider 运行时、50 例语料的构成和审计字段见 [COACH_RUNTIME_EVALS.md](COACH_RUNTIME_EVALS.md)。该语料是合同/攻击面回归集，不冒充经过专家评分的解释质量黄金集。
+
 ## 确定性模板
 
 模板直接读取 `LeakAssessment` 和证据手牌，固定输出：
@@ -97,14 +102,17 @@ python -m rivermind_core coach --database data/dev.db
 # 输出脱敏模型输入、最终解释、证据哈希和校验状态
 python -m rivermind_core coach --database data/dev.db --json
 
+# 运行 50 例离线候选评测门（不调用外部模型）
+python -m rivermind_core coach-eval
+
 # 报告自动为每张已触发 Leak Card 嵌入 AI 教练模板
 python -m rivermind_core report --database data/dev.db --output data/report.html
 ```
 
 ## 下一步
 
-- 建立 50 个专家黄金解释样例和对抗性候选集；
-- 选择模型供应商并实现超时、成本、重试和审计边界；
+- 建立至少 50 个由扑克专家盲审的解释质量样例；
+- 选择模型供应商，实现受控提示词、密钥管理和首个适配器；
 - 增加第二层语义支持度校验，但不允许校验器修改策略结论；
-- 记录提示词版本、模型版本和响应延迟；
+- 为无正文审计增加加密持久化、保留期和用户删除流程；
 - GTO Matcher 上线后扩展策略频率、范围和 EV 的强类型事实。

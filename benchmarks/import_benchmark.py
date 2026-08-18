@@ -14,6 +14,7 @@ sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 
 from rivermind_core.importer import HandHistoryImporter  # noqa: E402
 from rivermind_core.coach import explain_leak_report  # noqa: E402
+from rivermind_core.coach_evals import run_coach_eval  # noqa: E402
 from rivermind_core.parsers import default_registry  # noqa: E402
 from rivermind_core.reports import HandQuery, StatMetric  # noqa: E402
 from rivermind_core.storage import SQLiteHandStore  # noqa: E402
@@ -65,6 +66,11 @@ def main() -> int:
             coach_started = time.perf_counter()
             coach = explain_leak_report(leaks)
             coach_elapsed = time.perf_counter() - coach_started
+            coach_eval_started = time.perf_counter()
+            coach_eval = run_coach_eval(
+                PROJECT_ROOT / "evals" / "coach_candidate_cases.json"
+            )
+            coach_eval_elapsed = time.perf_counter() - coach_eval_started
         if not stats or stats[0].hands != args.hands:
             raise RuntimeError("Stats benchmark did not observe every imported hand")
         if not sessions or sessions[0].hands != args.hands:
@@ -75,6 +81,8 @@ def main() -> int:
             raise RuntimeError("Leak benchmark did not produce the expected review signal")
         if coach.explanation_count != len(leaks.cards):
             raise RuntimeError("Coach benchmark did not explain every leak card")
+        if coach_eval.total != 50 or coach_eval.failed:
+            raise RuntimeError("Coach candidate eval gate did not pass all 50 cases")
         result = {
             "hands": args.hands,
             "imported": report.imported,
@@ -86,6 +94,7 @@ def main() -> int:
             "related_1000_elapsed_seconds": round(related_elapsed, 3),
             "leaks_elapsed_seconds": round(leaks_elapsed, 3),
             "coach_templates_elapsed_seconds": round(coach_elapsed, 3),
+            "coach_eval_50_elapsed_seconds": round(coach_eval_elapsed, 3),
             "database_mb": round(database.stat().st_size / 1024 / 1024, 2),
             "fixture": "synthetic variants of the committed golden hand",
         }

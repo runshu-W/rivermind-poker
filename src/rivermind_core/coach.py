@@ -393,6 +393,54 @@ def explain_leak_card(
     return CoachItem(evidence, explanation)
 
 
+def build_candidate_skeleton(evidence: ExplanationEvidence) -> dict[str, object]:
+    """Return the smallest valid, evidence-bound candidate for an evidence packet."""
+    review_plan = ["{{rule.review_prompt}}"]
+    evidence_refs = [
+        "signal.title",
+        "signal.observed_percentage",
+        "signal.sample",
+        "signal.confidence_interval_95",
+        "rule.trigger",
+        "rule.rationale",
+        "limitations.context",
+        "rule.review_prompt",
+        "limitations.no_gto",
+    ]
+    if evidence.hand_fact_ids:
+        review_plan.append(f"先看{{{{{evidence.hand_fact_ids[0]}}}}}。")
+        evidence_refs.append(evidence.hand_fact_ids[0])
+    return {
+        "schema_version": COACH_CANDIDATE_SCHEMA_VERSION,
+        "evidence_id": evidence.evidence_id,
+        "evidence_hash": evidence.evidence_hash,
+        "headline": "{{signal.title}}",
+        "observation": (
+            "观察值{{signal.observed_percentage}}，样本{{signal.sample}}，"
+            "区间{{signal.confidence_interval_95}}，阈值{{rule.trigger}}。"
+        ),
+        "teaching_point": "{{rule.rationale}}{{limitations.context}}",
+        "review_plan": review_plan,
+        "uncertainty": "{{limitations.no_gto}}",
+        "evidence_refs": evidence_refs,
+    }
+
+
+def fallback_coach_item(
+    card: LeakCard,
+    issues: Sequence[ValidationIssue],
+) -> CoachItem:
+    """Build a deterministic fallback without accepting provider-authored text."""
+    evidence = build_explanation_evidence(card)
+    explanation = _template_explanation(
+        card,
+        evidence,
+        source=CoachSource.TEMPLATE_FALLBACK,
+        validation=CandidateValidation(ValidationStatus.REJECTED, tuple(issues)),
+    )
+    return CoachItem(evidence, explanation)
+
+
 def explain_leak_report(
     report: LeakReport,
     *,

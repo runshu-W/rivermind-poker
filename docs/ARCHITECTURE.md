@@ -20,7 +20,10 @@ flowchart LR
     STORE --> STAT["确定性统计引擎"]
     STAT --> LEAK["漏洞规则/模型"]
     LEAK --> EVID["解释证据包"]
-    EVID --> LLM["AI 教练"]
+    EVID --> CRT["教练运行时/资源门"]
+    CRT --> LLM["外部模型适配器（未接入）"]
+    LLM --> CVAL["候选忠实性校验"]
+    CVAL --> COACH["解释或模板回退"]
     NORM --> MATCH["GTO 节点匹配（后续）"]
     MATCH --> EVID
 ```
@@ -40,7 +43,9 @@ flowchart LR
 | Reports | Session、相关手牌分页、结构化回放 | API/CLI v0.1 |
 | Analysis Page | Leak Cards、AI 教练、核心统计、Session、最近手牌 | 本地 HTML v0.3 |
 | Leak Engine | 版本化规则、样本门槛、Wilson 区间与证据手牌 | v0.1 已实现 |
-| AI Coach | 脱敏证据、中文模板、候选输出校验与回退 | v0.1 已实现；外部 LLM 待接入 |
+| AI Coach | 脱敏证据、中文模板、候选输出校验与回退 | v0.2 已实现；外部 LLM 待接入 |
+| Coach Runtime | 异步 Provider、超时重试、资源预算与无正文审计 | v0.1 已实现；只有离线测试桩 |
+| Coach Eval Gate | 候选 schema、证据、数值、隐私和行动攻击面回归 | 50 例全部通过；专家质量集待建 |
 | GTO Matcher | 映射到验证解法 | Beta 可选 |
 
 ## 当前存储边界

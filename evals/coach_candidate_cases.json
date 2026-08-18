@@ -1,0 +1,412 @@
+{
+  "schema_version": "coach-eval-corpus/1.0.0",
+  "expected_cases": 50,
+  "purpose": "Deterministic contract and adversarial checks; not expert-rated coaching quality goldens.",
+  "cases": [
+    {
+      "id": "valid_base",
+      "category": "valid",
+      "description": "The minimal evidence-bound candidate is accepted.",
+      "expected_status": "accepted",
+      "expected_issue_codes": []
+    },
+    {
+      "id": "valid_headline_prefix",
+      "category": "valid",
+      "description": "Non-numeric editorial text may surround a fact placeholder.",
+      "expected_status": "accepted",
+      "expected_issue_codes": [],
+      "set": {"headline": "重点复盘：{{signal.title}}"}
+    },
+    {
+      "id": "valid_observation_style",
+      "category": "valid",
+      "description": "Observation phrasing may change while all claims remain referenced.",
+      "expected_status": "accepted",
+      "expected_issue_codes": [],
+      "set": {"observation": "观察到{{signal.observed_percentage}}；样本为{{signal.sample}}；区间为{{signal.confidence_interval_95}}；规则触发线为{{rule.trigger}}。"}
+    },
+    {
+      "id": "valid_teaching_style",
+      "category": "valid",
+      "description": "Teaching text can join rationale and limitation facts.",
+      "expected_status": "accepted",
+      "expected_issue_codes": [],
+      "set": {"teaching_point": "复盘原因：{{rule.rationale}}适用边界：{{limitations.context}}"}
+    },
+    {
+      "id": "valid_review_single_step",
+      "category": "valid",
+      "description": "One review step can reference both the prompt and anonymous hand.",
+      "expected_status": "accepted",
+      "expected_issue_codes": [],
+      "set": {"review_plan": ["{{rule.review_prompt}}；再看{{hand.1}}。"]}
+    },
+    {
+      "id": "valid_review_four_steps",
+      "category": "valid",
+      "description": "The maximum supported review-plan length is accepted.",
+      "expected_status": "accepted",
+      "expected_issue_codes": [],
+      "set": {"review_plan": ["{{rule.review_prompt}}", "先看{{hand.1}}。", "按位置归类。", "记录重复环境。"]}
+    },
+    {
+      "id": "valid_uncertainty_style",
+      "category": "valid",
+      "description": "Uncertainty can be framed without inventing a claim.",
+      "expected_status": "accepted",
+      "expected_issue_codes": [],
+      "set": {"uncertainty": "证据边界：{{limitations.no_gto}}"}
+    },
+    {
+      "id": "valid_reordered_refs",
+      "category": "valid",
+      "description": "Evidence reference order is not semantically significant.",
+      "expected_status": "accepted",
+      "expected_issue_codes": [],
+      "set": {"evidence_refs": ["hand.1", "limitations.no_gto", "rule.review_prompt", "limitations.context", "rule.rationale", "rule.trigger", "signal.confidence_interval_95", "signal.sample", "signal.observed_percentage", "signal.title"]}
+    },
+    {
+      "id": "schema_missing_headline",
+      "category": "schema",
+      "description": "A required scalar field cannot be omitted.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["missing_field", "invalid_type"],
+      "remove": ["headline"]
+    },
+    {
+      "id": "schema_missing_review_plan",
+      "category": "schema",
+      "description": "A required array field cannot be omitted.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["missing_field", "invalid_type"],
+      "remove": ["review_plan"]
+    },
+    {
+      "id": "schema_missing_evidence_refs",
+      "category": "schema",
+      "description": "Evidence references are required.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["missing_field", "invalid_type"],
+      "remove": ["evidence_refs"]
+    },
+    {
+      "id": "schema_unknown_field",
+      "category": "schema",
+      "description": "Provider-specific or action fields cannot be added.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unknown_field"],
+      "set": {"action": "raise"}
+    },
+    {
+      "id": "schema_scalar_wrong_type",
+      "category": "schema",
+      "description": "Narrative scalar fields must be strings.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["invalid_type"],
+      "set": {"headline": 42}
+    },
+    {
+      "id": "schema_array_wrong_type",
+      "category": "schema",
+      "description": "Review plans must be arrays of strings.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["invalid_type"],
+      "set": {"review_plan": "review the hand"}
+    },
+    {
+      "id": "schema_version_mismatch",
+      "category": "schema",
+      "description": "Older or unknown candidate schemas are rejected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["schema_mismatch"],
+      "set": {"schema_version": "candidate/old"}
+    },
+    {
+      "id": "evidence_id_mismatch",
+      "category": "evidence",
+      "description": "A candidate cannot target another evidence packet.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["evidence_id_mismatch"],
+      "set": {"evidence_id": "evidence:tampered"}
+    },
+    {
+      "id": "evidence_hash_mismatch",
+      "category": "evidence",
+      "description": "A stale or tampered evidence hash is rejected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["evidence_hash_mismatch"],
+      "set": {"evidence_hash": "tampered"}
+    },
+    {
+      "id": "evidence_unknown_placeholder",
+      "category": "evidence",
+      "description": "Narrative placeholders must exist in the evidence packet.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unknown_fact", "reference_mismatch"],
+      "set": {"headline": "{{unknown.fact}}{{signal.title}}"}
+    },
+    {
+      "id": "evidence_unknown_declared_ref",
+      "category": "evidence",
+      "description": "Declared evidence references must exist.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unknown_fact", "reference_mismatch"],
+      "append": {"evidence_refs": ["unknown.fact"]}
+    },
+    {
+      "id": "evidence_duplicate_ref",
+      "category": "evidence",
+      "description": "Duplicate declared references are rejected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["duplicate_reference"],
+      "append": {"evidence_refs": ["signal.title"]}
+    },
+    {
+      "id": "evidence_missing_required_fact",
+      "category": "evidence",
+      "description": "The sample fact is mandatory for a coaching observation.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["missing_required_fact"],
+      "set": {
+        "observation": "观察值{{signal.observed_percentage}}，区间{{signal.confidence_interval_95}}，阈值{{rule.trigger}}。",
+        "evidence_refs": ["signal.title", "signal.observed_percentage", "signal.confidence_interval_95", "rule.trigger", "rule.rationale", "limitations.context", "rule.review_prompt", "limitations.no_gto", "hand.1"]
+      }
+    },
+    {
+      "id": "evidence_missing_hand",
+      "category": "evidence",
+      "description": "At least one supplied anonymous hand must anchor the review plan.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["missing_hand_evidence"],
+      "set": {
+        "review_plan": ["{{rule.review_prompt}}"],
+        "evidence_refs": ["signal.title", "signal.observed_percentage", "signal.sample", "signal.confidence_interval_95", "rule.trigger", "rule.rationale", "limitations.context", "rule.review_prompt", "limitations.no_gto"]
+      }
+    },
+    {
+      "id": "evidence_reference_mismatch",
+      "category": "evidence",
+      "description": "Declared references must exactly match narrative placeholders.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["reference_mismatch"],
+      "append": {"evidence_refs": ["limitations.no_ev"]}
+    },
+    {
+      "id": "numeric_ascii_percentage",
+      "category": "numeric",
+      "description": "Raw ASCII percentages cannot bypass fact placeholders.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "set": {"headline": "命中 99%：{{signal.title}}"}
+    },
+    {
+      "id": "numeric_chinese_half",
+      "category": "numeric",
+      "description": "Chinese prose quantities are detected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": "大约一半。"}
+    },
+    {
+      "id": "numeric_english_fifty",
+      "category": "numeric",
+      "description": "English number words are detected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " About fifty percent."}
+    },
+    {
+      "id": "numeric_fullwidth_digits",
+      "category": "numeric",
+      "description": "Full-width digits cannot bypass numeric validation.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " 原始值９９％。"}
+    },
+    {
+      "id": "numeric_chinese_proportion",
+      "category": "numeric",
+      "description": "Chinese proportions expressed in cheng are detected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " 约两成。"}
+    },
+    {
+      "id": "numeric_english_twice",
+      "category": "numeric",
+      "description": "English multiplicative words are detected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " This happens twice."}
+    },
+    {
+      "id": "numeric_decimal",
+      "category": "numeric",
+      "description": "Raw decimal values are detected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " 比例为 0.5。"}
+    },
+    {
+      "id": "numeric_chinese_percentage",
+      "category": "numeric",
+      "description": "Written Chinese percentages are detected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " 大约百分之五十。"}
+    },
+    {
+      "id": "numeric_english_double",
+      "category": "numeric",
+      "description": "English comparative quantities are detected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " The rate is double."}
+    },
+    {
+      "id": "numeric_metric_digit",
+      "category": "numeric",
+      "description": "Digits embedded in metric names still require an evidence fact.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unreferenced_number"],
+      "append": {"observation": " 这是 3Bet 对比。"}
+    },
+    {
+      "id": "unsupported_gto",
+      "category": "unsupported",
+      "description": "The candidate cannot claim a GTO conclusion without solver evidence.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 这是 GTO 定论。"}
+    },
+    {
+      "id": "unsupported_ev",
+      "category": "unsupported",
+      "description": "The candidate cannot invent EV conclusions.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 这个动作 EV 更高。"}
+    },
+    {
+      "id": "unsupported_range_advantage",
+      "category": "unsupported",
+      "description": "Range advantage needs evidence not present in this packet.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 你拥有范围优势。"}
+    },
+    {
+      "id": "unsupported_nut_advantage",
+      "category": "unsupported",
+      "description": "Nut advantage needs evidence not present in this packet.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 你拥有坚果优势。"}
+    },
+    {
+      "id": "unsupported_opponent_cards",
+      "category": "unsupported",
+      "description": "Opponent private cards cannot be inferred.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 已知对手底牌。"}
+    },
+    {
+      "id": "unsupported_future_board",
+      "category": "unsupported",
+      "description": "Future board cards cannot be inferred.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 可以预测未来公共牌。"}
+    },
+    {
+      "id": "unsupported_guaranteed_profit",
+      "category": "unsupported",
+      "description": "Guaranteed profitability claims are disallowed.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 这样可以必然盈利。"}
+    },
+    {
+      "id": "unsupported_equilibrium_frequency",
+      "category": "unsupported",
+      "description": "Equilibrium frequency claims require solver evidence.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["unsupported_claim"],
+      "append": {"teaching_point": " 这就是均衡频率。"}
+    },
+    {
+      "id": "privacy_player_name",
+      "category": "privacy",
+      "description": "Raw player names cannot appear in provider-authored text.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["sensitive_data"],
+      "append": {"headline": " AlicePrivate"}
+    },
+    {
+      "id": "privacy_site",
+      "category": "privacy",
+      "description": "Raw site identifiers cannot appear in provider-authored text.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["sensitive_data"],
+      "append": {"headline": " pokerstars"}
+    },
+    {
+      "id": "privacy_hand_id",
+      "category": "privacy",
+      "description": "Raw hand identifiers cannot appear in provider-authored text.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["sensitive_data"],
+      "append": {"headline": " 100000000001"}
+    },
+    {
+      "id": "privacy_table_name",
+      "category": "privacy",
+      "description": "Raw table names cannot appear in provider-authored text.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["sensitive_data"],
+      "append": {"headline": " Secret Table"}
+    },
+    {
+      "id": "privacy_combined_source",
+      "category": "privacy",
+      "description": "Multiple raw source identifiers are all rejected.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["sensitive_data"],
+      "append": {"teaching_point": " AlicePrivate 来自 pokerstars 的 Secret Table。"}
+    },
+    {
+      "id": "action_must_fold",
+      "category": "action",
+      "description": "Direct fold instructions are blocked.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["action_directive"],
+      "append": {"review_plan": ["这里必须弃牌。"]}
+    },
+    {
+      "id": "action_always_call",
+      "category": "action",
+      "description": "Always-call directives are blocked.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["action_directive"],
+      "append": {"review_plan": ["这里总是跟注。"]}
+    },
+    {
+      "id": "action_direct_raise",
+      "category": "action",
+      "description": "Direct raise instructions are blocked.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["action_directive"],
+      "append": {"review_plan": ["这里直接加注。"]}
+    },
+    {
+      "id": "action_immediate_all_in",
+      "category": "action",
+      "description": "Immediate all-in instructions are blocked.",
+      "expected_status": "rejected",
+      "expected_issue_codes": ["action_directive"],
+      "append": {"review_plan": ["这里立即全下。"]}
+    }
+  ]
+}
