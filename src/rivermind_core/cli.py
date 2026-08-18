@@ -10,6 +10,7 @@ from typing import Sequence
 
 from rivermind_core.html_report import render_analysis_page
 from rivermind_core.importer import HandHistoryImporter, ImportBatchReport
+from rivermind_core.leaks import LeakAssessment, LeakReport, LeakStatus
 from rivermind_core.models import GameType, PlayerPosition
 from rivermind_core.parsers import default_registry
 from rivermind_core.replay import HandReplay
@@ -40,6 +41,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_scope_arguments(stats_parser)
     _add_dimension_arguments(stats_parser)
     stats_parser.add_argument("--json", action="store_true")
+
+    leaks_parser = subparsers.add_parser(
+        "leaks", help="Evaluate deterministic review signals with hand evidence"
+    )
+    _add_database_argument(leaks_parser)
+    _add_scope_arguments(leaks_parser)
+    _add_dimension_arguments(leaks_parser)
+    leaks_parser.add_argument("--evidence-limit", type=int, default=5)
+    leaks_parser.add_argument("--json", action="store_true")
 
     sessions_parser = subparsers.add_parser(
         "sessions", help="Summarize cash sessions and tournaments"
@@ -89,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report_parser.add_argument("--title", default="RiverMind Poker Analysis")
     report_parser.add_argument("--recent-limit", type=int, default=50)
+    report_parser.add_argument("--evidence-limit", type=int, default=5)
     return parser
 
 
@@ -97,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     runners = {
         "import": _run_import,
         "stats": _run_stats,
+        "leaks": _run_leaks,
         "sessions": _run_sessions,
         "hands": _run_hands,
         "replay": _run_replay,
@@ -148,6 +160,32 @@ def _run_stats(args: argparse.Namespace) -> int:
         print(json.dumps({"scope": _scope_dict(args), "players": [_player_stats_dict(item) for item in stats]}, ensure_ascii=False))
     else:
         _print_stats(stats)
+    return 0
+
+
+def _run_leaks(args: argparse.Namespace) -> int:
+    if not _database_exists(args.database):
+        return 2
+    try:
+        stat_filter = _stats_filter(args)
+        if not 1 <= args.evidence_limit <= 20:
+            raise ValueError("evidence-limit must be between 1 and 20")
+    except ValueError as exc:
+        return _print_value_error(exc)
+    player_name, heroes_only = _scope(args)
+    with SQLiteHandStore(args.database) as store:
+        report = store.query_leaks(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=stat_filter,
+            evidence_limit=args.evidence_limit,
+        )
+    if args.json:
+        payload = _leak_report_dict(report)
+        payload["scope"] = _scope_dict(args)
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        _print_leaks(report)
     return 0
 
 
@@ -225,6 +263,8 @@ def _run_report(args: argparse.Namespace) -> int:
     try:
         stat_filter = _stats_filter(args)
         recent_query = HandQuery(stat_filter=stat_filter, limit=args.recent_limit)
+        if not 1 <= args.evidence_limit <= 20:
+            raise ValueError("evidence-limit must be between 1 and 20")
     except ValueError as exc:
         return _print_value_error(exc)
     player_name, heroes_only = _scope(args)
@@ -244,10 +284,22 @@ def _run_report(args: argparse.Namespace) -> int:
             heroes_only=heroes_only,
             query=recent_query,
         )
+        leak_report = store.query_leaks(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=stat_filter,
+            evidence_limit=args.evidence_limit,
+        )
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        render_analysis_page(stats, sessions, recent_hands, title=args.title),
+        render_analysis_page(
+            stats,
+            sessions,
+            recent_hands,
+            leak_report=leak_report,
+            title=args.title,
+        ),
         encoding="utf-8",
     )
     print(f"Report written: {output}")
@@ -455,6 +507,70 @@ def _hand_report_dict(report: PlayerHandReport) -> dict[str, object]:
     }
 
 
+def _leak_report_dict(report: LeakReport) -> dict[str, object]:
+    return {
+        "profile": {
+            "id": report.profile_id,
+            "version": report.profile_version,
+            "method": "95% Wilson interval must fully cross the review threshold",
+        },
+        "summary": {
+            "detected": report.detected_count,
+            "clear": report.clear_count,
+            "insufficient_sample": report.insufficient_sample_count,
+        },
+        "assessments": [_leak_assessment_dict(item) for item in report.assessments],
+        "cards": [
+            {
+                **_leak_assessment_dict(card.assessment),
+                "evidence_hands": [
+                    _hand_report_dict(hand) for hand in card.evidence_hands
+                ],
+            }
+            for card in report.cards
+        ],
+    }
+
+
+def _leak_assessment_dict(assessment: LeakAssessment) -> dict[str, object]:
+    confidence_interval = None
+    if assessment.confidence_low is not None and assessment.confidence_high is not None:
+        confidence_interval = [
+            round(assessment.confidence_low, 2),
+            round(assessment.confidence_high, 2),
+        ]
+    return {
+        "rule_id": assessment.rule_id,
+        "rule_version": assessment.profile_version,
+        "player": assessment.player_name,
+        "title": assessment.title,
+        "status": assessment.status.value,
+        "severity": None if assessment.severity is None else assessment.severity.value,
+        "metric": assessment.metric.value,
+        "direction": assessment.direction.value,
+        "occurrences": assessment.occurrences,
+        "opportunities": assessment.opportunities,
+        "observed_percentage": (
+            None
+            if assessment.observed_percentage is None
+            else round(assessment.observed_percentage, 2)
+        ),
+        "confidence_interval_95": confidence_interval,
+        "threshold": {
+            "trigger_percentage": assessment.trigger_percentage,
+            "priority_percentage": assessment.priority_percentage,
+            "min_opportunities": assessment.min_opportunities,
+        },
+        "sample_shortfall": assessment.sample_shortfall,
+        "evidence_selector": {
+            "metric": assessment.metric.value,
+            "occurred": assessment.evidence_occurred,
+        },
+        "rationale": assessment.rationale,
+        "review_prompt": assessment.review_prompt,
+    }
+
+
 def _replay_dict(replay: HandReplay) -> dict[str, object]:
     return {
         "site": replay.site,
@@ -542,6 +658,32 @@ def _print_sessions(sessions: Sequence[SessionSummary]) -> None:
     for item in sessions:
         started = item.started_at.isoformat(sep=" ") if item.started_at else "unknown"
         print(f"{started:20} {item.game_type.value:10} {item.hands:5d} {str(item.net_result):>10} {item.result_unit:5} {str(item.net_result_bb):>9}  {item.player_name}")
+
+
+def _print_leaks(report: LeakReport) -> None:
+    print(
+        f"Leak profile {report.profile_id} v{report.profile_version}: "
+        f"{report.detected_count} detected, {report.clear_count} clear, "
+        f"{report.insufficient_sample_count} insufficient sample"
+    )
+    if not report.cards:
+        print("No qualified review signals found")
+        return
+    for card in report.cards:
+        item = card.assessment
+        assert item.severity is not None
+        assert item.observed_percentage is not None
+        assert item.confidence_low is not None
+        assert item.confidence_high is not None
+        interval = f"{item.confidence_low:.1f}-{item.confidence_high:.1f}%"
+        evidence = ", ".join(
+            f"{hand.stats.site}#{hand.stats.hand_id}" for hand in card.evidence_hands
+        )
+        print(
+            f"[{item.severity.value}] {item.player_name} · {item.title}: "
+            f"{item.observed_percentage:.1f}% ({item.occurrences}/{item.opportunities}), "
+            f"95% CI {interval}; evidence: {evidence or 'none'}"
+        )
 
 
 def _print_hands(hands: Sequence[PlayerHandReport]) -> None:

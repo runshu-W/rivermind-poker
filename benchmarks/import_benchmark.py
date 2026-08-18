@@ -58,12 +58,17 @@ def main() -> int:
                 ),
             )
             related_elapsed = time.perf_counter() - related_started
+            leaks_started = time.perf_counter()
+            leaks = store.query_leaks(heroes_only=True)
+            leaks_elapsed = time.perf_counter() - leaks_started
         if not stats or stats[0].hands != args.hands:
             raise RuntimeError("Stats benchmark did not observe every imported hand")
         if not sessions or sessions[0].hands != args.hands:
             raise RuntimeError("Session benchmark did not observe every imported hand")
         if len(related) != min(args.hands, 1000):
             raise RuntimeError("Related-hand benchmark returned the wrong page size")
+        if args.hands >= 30 and not leaks.cards:
+            raise RuntimeError("Leak benchmark did not produce the expected review signal")
         result = {
             "hands": args.hands,
             "imported": report.imported,
@@ -73,6 +78,7 @@ def main() -> int:
             "stats_hands_per_second": round(args.hands / stats_elapsed),
             "sessions_elapsed_seconds": round(sessions_elapsed, 3),
             "related_1000_elapsed_seconds": round(related_elapsed, 3),
+            "leaks_elapsed_seconds": round(leaks_elapsed, 3),
             "database_mb": round(database.stat().st_size / 1024 / 1024, 2),
             "fixture": "synthetic variants of the committed golden hand",
         }

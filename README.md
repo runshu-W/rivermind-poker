@@ -14,7 +14,7 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 
 ## 当前状态
 
-项目处于 Phase 0。导入与基础统计两条纵向切片已经建立：
+项目已完成 H2N-lite Beta 的核心分析底座：
 
 - 规范化手牌领域模型；
 - 可插拔牌谱解析器接口；
@@ -27,7 +27,9 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 - 按赛制、位置、有效筹码过滤的 Python API 和 CLI；
 - 逐动作筹码账本、Cash 盈亏、MTT 筹码变化和 Session 聚合；
 - 相关手牌分页查询、结构化回放，以及可直接打开的本地分析页；
-- 36 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
+- 6 条版本化确定性复盘规则，使用样本门槛和 95% Wilson 区间生成 Leak Cards；
+- 每张 Leak Card 包含统计口径、严重度、复盘问题和可下钻的证据手牌；
+- 41 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -41,8 +43,9 @@ python -m rivermind_core import tests/fixtures --database data/dev.db
 # 默认统计牌谱中标记的 Hero；也可使用 --player 指定玩家
 python -m rivermind_core stats --database data/dev.db
 
-# Session、相关手牌和结构化回放
+# Session、Leak Cards、相关手牌和结构化回放
 python -m rivermind_core sessions --database data/dev.db
+python -m rivermind_core leaks --database data/dev.db --json
 python -m rivermind_core hands --database data/dev.db --metric flop_cbet --occurred
 python -m rivermind_core replay pokerstars 100000000001 --database data/dev.db --json
 
@@ -84,7 +87,7 @@ docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
-导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)。
+导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则和证据协议见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)。
 
 ## 产品边界
 

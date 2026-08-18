@@ -5,6 +5,7 @@ from decimal import Decimal
 from html import escape
 from typing import Sequence
 
+from rivermind_core.leaks import LeakCard, LeakDirection, LeakReport, LeakSeverity
 from rivermind_core.reports import PlayerHandReport
 from rivermind_core.sessions import SessionSummary
 from rivermind_core.stats import METRIC_NAMES, PlayerStats, StatValue
@@ -28,6 +29,7 @@ def render_analysis_page(
     sessions: Sequence[SessionSummary],
     recent_hands: Sequence[PlayerHandReport],
     *,
+    leak_report: LeakReport | None = None,
     title: str = "RiverMind Poker Analysis",
 ) -> str:
     total_hands = sum(item.hands for item in stats)
@@ -37,6 +39,8 @@ def render_analysis_page(
     stats_rows = "".join(_stats_row(item) for item in stats)
     session_rows = "".join(_session_row(item) for item in sessions)
     hand_rows = "".join(_hand_row(item) for item in recent_hands)
+    leak_section = _leak_section(leak_report)
+    detected_leaks = 0 if leak_report is None else leak_report.detected_count
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -51,9 +55,20 @@ def render_analysis_page(
     body {{ margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,Segoe UI,sans-serif; }}
     main {{ max-width:1280px; margin:auto; padding:32px 22px 60px; }}
     h1 {{ margin:0 0 6px; font-size:28px; }} h2 {{ margin:32px 0 12px; font-size:18px; }}
-    .muted {{ color:var(--muted); }} .grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:22px; }}
+    .muted {{ color:var(--muted); }} .grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:22px; }}
     .card {{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }}
     .value {{ font-size:25px; font-weight:700; margin-top:5px; }}
+    .leak-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }}
+    .leak-card {{ background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--blue); border-radius:12px; padding:16px; }}
+    .leak-card.priority {{ border-left-color:var(--red); }}
+    .leak-head {{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }}
+    .leak-title {{ font-size:17px; font-weight:700; }} .leak-metric {{ font-size:23px; font-weight:700; margin:12px 0 2px; }}
+    .severity {{ font-size:12px; padding:2px 8px; border-radius:999px; background:#1d2942; color:var(--blue); white-space:nowrap; }}
+    .severity.priority {{ background:#3b202b; color:var(--red); }}
+    .review-prompt {{ margin:12px 0; padding:10px 12px; background:#0f1628; border-radius:8px; }}
+    details {{ margin-top:10px; }} summary {{ cursor:pointer; color:var(--blue); }}
+    .evidence {{ margin:8px 0 0; padding-left:20px; color:var(--muted); }}
+    .empty {{ background:var(--panel); border:1px dashed var(--line); border-radius:12px; padding:18px; color:var(--muted); }}
     .table-wrap {{ overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:12px; }}
     table {{ width:100%; border-collapse:collapse; white-space:nowrap; }}
     th,td {{ padding:11px 13px; border-bottom:1px solid var(--line); text-align:right; }}
@@ -61,7 +76,7 @@ def render_analysis_page(
     tr:last-child td {{ border-bottom:0; }} .positive {{ color:var(--green); }} .negative {{ color:var(--red); }}
     .pill {{ display:inline-block; padding:2px 8px; border-radius:999px; background:#1d2942; color:var(--blue); }}
     footer {{ margin-top:28px; color:var(--muted); font-size:12px; }}
-    @media (max-width:760px) {{ .grid {{ grid-template-columns:1fr; }} main {{ padding:22px 12px 40px; }} }}
+    @media (max-width:760px) {{ .grid,.leak-grid {{ grid-template-columns:1fr; }} main {{ padding:22px 12px 40px; }} }}
   </style>
 </head>
 <body><main>
@@ -70,8 +85,11 @@ def render_analysis_page(
   <section class="grid">
     <div class="card"><div class="muted">统计手数</div><div class="value">{total_hands}</div></div>
     <div class="card"><div class="muted">Session</div><div class="value">{len(sessions)}</div></div>
+    <div class="card"><div class="muted">复盘信号</div><div class="value">{detected_leaks}</div></div>
     <div class="card"><div class="muted">账本校验</div><div class="value">{"通过" if balanced else "需检查"}</div></div>
   </section>
+  <h2>Leak Cards</h2>
+  {leak_section}
   <h2>核心统计</h2>
   <div class="table-wrap"><table><thead><tr><th>玩家</th><th>手数</th>{''.join(f'<th>{METRIC_LABELS[name]}</th>' for name in METRIC_NAMES)}</tr></thead>
   <tbody>{stats_rows or '<tr><td colspan="11">暂无数据</td></tr>'}</tbody></table></div>
@@ -81,7 +99,7 @@ def render_analysis_page(
   <h2>最近手牌</h2>
   <div class="table-wrap"><table><thead><tr><th>玩家</th><th>时间 / 手牌</th><th>类型</th><th>位置</th><th>有效筹码</th><th>结果</th><th>BB</th></tr></thead>
   <tbody>{hand_rows or '<tr><td colspan="7">暂无数据</td></tr>'}</tbody></table></div>
-  <footer>所有数值由确定性代码从规范化牌谱计算。MTT 结果单位为筹码，不代表奖金或 ROI。此页面不包含实时行动建议。</footer>
+  <footer>所有数值由确定性代码从规范化牌谱计算。Leak Cards 是带样本门槛的复盘筛选信号，不代表 GTO 定论。MTT 结果单位为筹码，不代表奖金或 ROI。此页面不包含实时行动建议。</footer>
 </main></body></html>"""
 
 
@@ -114,6 +132,66 @@ def _hand_row(report: PlayerHandReport) -> str:
         f"<td>{report.stats.position.value}</td><td>{report.stats.effective_stack_bb} BB</td>"
         f"<td class='{result_class}'>{report.net_result} {escape(report.result_unit)}</td>"
         f"<td class='{result_class}'>{report.net_result_bb}</td></tr>"
+    )
+
+
+def _leak_section(report: LeakReport | None) -> str:
+    if report is None:
+        return '<div class="empty">本次报告未执行漏洞评估。</div>'
+    if not report.cards:
+        return (
+            '<div class="empty">当前没有达到保守触发条件的复盘信号。'
+            f"已通过 {report.clear_count} 项，另有 {report.insufficient_sample_count} 项样本不足。"
+            f"规则配置：{escape(report.profile_id)} v{escape(report.profile_version)}。</div>"
+        )
+    cards = "".join(_leak_card(card) for card in report.cards)
+    return (
+        f'<div class="muted" style="margin-bottom:10px">规则配置：{escape(report.profile_id)} '
+        f"v{escape(report.profile_version)}；仅在 95% Wilson 区间整体越过阈值时触发。</div>"
+        f'<section class="leak-grid">{cards}</section>'
+    )
+
+
+def _leak_card(card: LeakCard) -> str:
+    item = card.assessment
+    assert item.severity is not None
+    assert item.observed_percentage is not None
+    assert item.confidence_low is not None
+    assert item.confidence_high is not None
+    severity_class = (
+        "priority" if item.severity == LeakSeverity.PRIORITY else "review"
+    )
+    severity_label = "优先复盘" if item.severity == LeakSeverity.PRIORITY else "建议复盘"
+    direction = "≥" if item.direction == LeakDirection.ABOVE else "≤"
+    interval = f"95% 区间 {item.confidence_low:.1f}%–{item.confidence_high:.1f}%"
+    observed = f"{item.observed_percentage:.1f}%"
+    evidence = "".join(_leak_evidence_hand(hand) for hand in card.evidence_hands)
+    if not evidence:
+        evidence = "<li>当前筛选范围内没有可展示的证据手牌。</li>"
+    return (
+        f'<article class="leak-card {severity_class}">'
+        '<div class="leak-head"><div>'
+        f'<div class="muted">{escape(item.player_name)} · {escape(item.metric.value)}</div>'
+        f'<div class="leak-title">{escape(item.title)}</div></div>'
+        f'<span class="severity {severity_class}">{severity_label}</span></div>'
+        f'<div class="leak-metric">{observed}</div>'
+        f'<div class="muted">{item.occurrences}/{item.opportunities} · {interval} · '
+        f"复盘阈值 {direction}{item.trigger_percentage:g}%</div>"
+        f'<p>{escape(item.rationale)}</p>'
+        f'<div class="review-prompt">{escape(item.review_prompt)}</div>'
+        f'<details><summary>查看证据手牌（{len(card.evidence_hands)}）</summary>'
+        f'<ul class="evidence">{evidence}</ul></details></article>'
+    )
+
+
+def _leak_evidence_hand(report: PlayerHandReport) -> str:
+    row = report.stats
+    played_at = report.played_at.isoformat(sep=" ") if report.played_at else "未知时间"
+    hand_key = f"{row.site} #{row.hand_id}"
+    result = f"{report.net_result} {report.result_unit}"
+    return (
+        f"<li>{escape(played_at)} · {escape(hand_key)} · {escape(row.position.value)} · "
+        f"{escape(result)}</li>"
     )
 
 

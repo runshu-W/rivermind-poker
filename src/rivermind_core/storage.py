@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -11,6 +11,15 @@ from rivermind_core.importer import (
     ImportBatchReport,
     ImportItemResult,
     ImportItemStatus,
+)
+from rivermind_core.leaks import (
+    DEFAULT_LEAK_RULES,
+    LeakCard,
+    LeakReport,
+    LeakRule,
+    LeakStatus,
+    build_leak_report,
+    evaluate_leaks,
 )
 from rivermind_core.models import GameType, HandHistory, PlayerPosition
 from rivermind_core.replay import HandReplay, build_hand_replay
@@ -328,8 +337,6 @@ class SQLiteHandStore:
         stat_filter: StatsFilter | None = None,
         batch_size: int = 1000,
     ) -> Iterator[PlayerHandStatRow]:
-        if player_name is not None and heroes_only:
-            raise ValueError("player_name and heroes_only cannot be combined")
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         conditions, parameters = self._stat_conditions(
@@ -397,6 +404,41 @@ class SQLiteHandStore:
             parameters,
         ).fetchall()
         return tuple(self._report_from_sqlite(row) for row in rows)
+
+    def query_leaks(
+        self,
+        *,
+        player_name: str | None = None,
+        heroes_only: bool = False,
+        stat_filter: StatsFilter | None = None,
+        rules: Sequence[LeakRule] = DEFAULT_LEAK_RULES,
+        evidence_limit: int = 5,
+    ) -> LeakReport:
+        if not 1 <= evidence_limit <= 20:
+            raise ValueError("evidence_limit must be between 1 and 20")
+        active_filter = stat_filter or StatsFilter()
+        stats = self.query_player_stats(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=active_filter,
+        )
+        assessments = evaluate_leaks(stats, rules=rules)
+        cards: list[LeakCard] = []
+        for assessment in assessments:
+            if assessment.status != LeakStatus.DETECTED:
+                continue
+            evidence = self.query_hands(
+                player_name=assessment.player_name,
+                heroes_only=heroes_only,
+                query=HandQuery(
+                    stat_filter=active_filter,
+                    metric=assessment.metric,
+                    occurred=assessment.evidence_occurred,
+                    limit=evidence_limit,
+                ),
+            )
+            cards.append(LeakCard(assessment=assessment, evidence_hands=evidence))
+        return build_leak_report(assessments, cards)
 
     def query_sessions(
         self,
@@ -525,8 +567,6 @@ class SQLiteHandStore:
         heroes_only: bool,
         stat_filter: StatsFilter,
     ) -> tuple[list[str], list[object]]:
-        if player_name is not None and heroes_only:
-            raise ValueError("player_name and heroes_only cannot be combined")
         conditions: list[str] = []
         parameters: list[object] = []
         if player_name is not None:

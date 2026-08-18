@@ -85,6 +85,17 @@ class ProductCliTest(unittest.TestCase):
         self.assertEqual(hero_raise["pot_after"], "0.40")
         self.assertTrue(payload["accounting_balanced"])
 
+    def test_leaks_cli_exposes_versioned_rules_and_sample_status(self) -> None:
+        payload = self._json_command("leaks", "--json")
+
+        self.assertEqual(payload["profile"]["id"], "broad-review-signals")
+        self.assertEqual(payload["profile"]["version"], "0.1.0")
+        self.assertEqual(payload["summary"]["detected"], 0)
+        self.assertEqual(payload["summary"]["insufficient_sample"], 6)
+        self.assertEqual(len(payload["assessments"]), 6)
+        self.assertEqual(payload["cards"], [])
+        self.assertTrue(payload["scope"]["heroes_only"])
+
     def test_report_cli_generates_escaped_local_analysis_page(self) -> None:
         output = self.root / "analysis.html"
         stdout = io.StringIO()
@@ -106,6 +117,8 @@ class ProductCliTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
         self.assertNotIn("<script>alert(1)</script>", html)
         self.assertIn("Hero", html)
+        self.assertIn("Leak Cards", html)
+        self.assertIn("样本不足", html)
         self.assertIn("核心统计", html)
 
     def _json_command(self, command: str, *arguments: str):
