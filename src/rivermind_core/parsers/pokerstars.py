@@ -65,7 +65,7 @@ class PokerStarsCashParser(HandHistoryParser):
     adapters sharing the same canonical model.
     """
 
-    name = "pokerstars_cash_v1"
+    name = "pokerstars_cash_v2"
 
     def can_parse(self, raw_text: str) -> bool:
         first_line = raw_text.lstrip().splitlines()[0]
