@@ -37,6 +37,32 @@ MINIMAL_GITATTRIBUTES = (
 EMPTY_CATALOG = '{\n  "schema_version": "solution-catalog/1.0.0",\n  "solutions": []\n}\n'
 
 
+def write_text(path: Path, text: str) -> Path:
+    """Write ``text`` with the bytes it literally contains.
+
+    ``newline=""`` is not optional here.  Python's text mode translates ``\n``
+    to ``\r\n`` on Windows, so a plain ``write_text`` would hand the guard a
+    CRLF ``solutions/catalog.json`` and the guard would correctly reject it —
+    a test failure that says nothing about the code under test.  There is one
+    writer precisely so that a second one cannot forget.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="")
+    return path
+
+
+def scaffold(root: Path) -> None:
+    """The minimum tree the guard expects to find."""
+
+    (root / "tools").mkdir(parents=True)
+    (root / "solutions").mkdir()
+    (root / "tests" / "fixtures").mkdir(parents=True)
+    shutil.copy2(GUARD, root / "tools" / "check_repository.py")
+    write_text(root / ".gitattributes", MINIMAL_GITATTRIBUTES)
+    write_text(root / "solutions" / "catalog.json", EMPTY_CATALOG)
+
+
 class HashAddressedRulesTest(unittest.TestCase):
     """``Path.match`` does not do recursive ``**`` before 3.13.
 
@@ -65,21 +91,13 @@ class _Repo:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        (root / "tools").mkdir(parents=True)
-        (root / "solutions").mkdir()
-        (root / "tests" / "fixtures").mkdir(parents=True)
-        shutil.copy2(GUARD, root / "tools" / "check_repository.py")
-        self.write(".gitattributes", MINIMAL_GITATTRIBUTES)
-        self.write("solutions/catalog.json", EMPTY_CATALOG)
+        scaffold(root)
         self.git("init", "-q")
         self.git("config", "user.email", "guard@example.invalid")
         self.git("config", "user.name", "Guard Test")
 
     def write(self, relative: str, text: str) -> Path:
-        path = self.root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8", newline="")
-        return path
+        return write_text(self.root / relative, text)
 
     def write_bytes(self, relative: str, payload: bytes) -> Path:
         path = self.root / relative
@@ -221,12 +239,7 @@ class GuardFallbackTest(unittest.TestCase):
         self._temp = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp.cleanup)
         root = Path(self._temp.name) / "plain"
-        (root / "tools").mkdir(parents=True)
-        (root / "solutions").mkdir()
-        (root / "tests" / "fixtures").mkdir(parents=True)
-        shutil.copy2(GUARD, root / "tools" / "check_repository.py")
-        (root / ".gitattributes").write_text(MINIMAL_GITATTRIBUTES, encoding="utf-8")
-        (root / "solutions" / "catalog.json").write_text(EMPTY_CATALOG, encoding="utf-8")
+        scaffold(root)
         self.root = root
 
     def _run(self, *, path: str) -> subprocess.CompletedProcess[str]:
@@ -256,11 +269,40 @@ class GuardFallbackTest(unittest.TestCase):
         """It sees ignored files too, so it fails closed rather than open."""
 
         (self.root / "data").mkdir()
-        (self.root / ".gitignore").write_text("data/\n", encoding="utf-8")
+        write_text(self.root / ".gitignore", "data/\n")
         (self.root / "data" / "x.db").write_bytes(b"SQLite format 3\x00")
         result = self._run(path=os.environ.get("PATH", ""))
         self.assertEqual(result.returncode, 1)
         self.assertIn("data/x.db", result.stderr)
+
+
+class TestHarnessTest(unittest.TestCase):
+    """The harness itself, because it broke on Windows and not on Linux.
+
+    ``GuardFallbackTest`` originally scaffolded the catalog with a plain
+    ``write_text``.  On Linux that is byte-exact; on Windows text mode turns
+    every ``\n`` into ``\r\n``, so the guard was handed a CRLF
+    ``solutions/catalog.json`` and — correctly — rejected it.  The guard was
+    right and the test was wrong, which is the hardest kind of failure to read.
+
+    Both assertions below are platform-independent statements that would fail on
+    Windows if the ``newline=""`` ever came off again.
+    """
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name) / "harness"
+
+    def test_the_writer_emits_exactly_the_bytes_it_was_given(self) -> None:
+        path = write_text(self.root / "sample.txt", "a\nb\n")
+        self.assertEqual(path.read_bytes(), b"a\nb\n")
+
+    def test_the_scaffolded_catalog_is_never_crlf(self) -> None:
+        scaffold(self.root)
+        catalog = (self.root / "solutions" / "catalog.json").read_bytes()
+        self.assertNotIn(b"\r\n", catalog)
+        self.assertEqual(catalog, EMPTY_CATALOG.encode("utf-8"))
 
 
 if __name__ == "__main__":  # pragma: no cover

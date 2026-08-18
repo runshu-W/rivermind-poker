@@ -407,6 +407,8 @@ git 不可用或当前目录不是仓库时，回退到走文件系统。回退�
 
 `tests/test_repository_guard.py` 把这些钉住了：临时建 git 仓库，把守卫当子进程跑。被忽略的 `.db` 必须通过；未被忽略的、以及被 `-f` 强加的 `.db` 必须失败。
 
+这个测试文件自己先在 Windows 上翻了车：搭脚手架时用了普通的 `write_text`，Windows 文本模式把 `\n` 全换成 `\r\n`，于是喂给守卫一个 CRLF 的 `solutions/catalog.json`——守卫**正确地**拒绝了它。守卫是对的，测试是错的，这种失败最难读。现在所有写入都走同一个 `write_text(..., newline="")`，并且补了两条平台无关的断言，一旦 `newline=""` 再掉，失败信息会直接指向写入器而不是守卫。**这正是 CI 里 Windows 那几行存在的理由**：字节完整性的问题只在 Windows 上现形。
+
 建 CI 时立刻抓到一个真问题：`test_rejects_json_nested_too_deeply` 在 3.12/3.13 上失败——CPython 3.12 提高了 json 的嵌套上限，3000 层不再抛 `RecursionError`。行为本身仍然失败关闭（文档被当成非对象拒绝），是测试写死了错误文案。已改成用 50,000 层（三个版本都稳定触发）并补一条浅层用例。
 
 ### 3.13 GGPoker 解析器 v0.1
