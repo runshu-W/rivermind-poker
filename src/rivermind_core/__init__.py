@@ -17,6 +17,7 @@ from .importer import (
     split_hand_histories,
 )
 from .storage import SQLiteHandStore
+from .stats import PlayerStats, StatValue, calculate_player_stats
 
 __all__ = [
     "Action",
@@ -30,6 +31,9 @@ __all__ = [
     "ImportItemResult",
     "ImportItemStatus",
     "Player",
+    "PlayerStats",
     "SQLiteHandStore",
+    "StatValue",
+    "calculate_player_stats",
     "split_hand_histories",
 ]

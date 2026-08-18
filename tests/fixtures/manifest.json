@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "provenance_note": "Synthetic representative hands only; no real user data is claimed.",
+  "hands": [
+    {
+      "file": "pokerstars_cash.txt",
+      "site": "pokerstars",
+      "game_type": "cash",
+      "hand_id": "100000000001",
+      "features": ["heads_up_at_6max_table", "turn_fold", "uncalled_bet"]
+    },
+    {
+      "file": "pokerstars_mtt.txt",
+      "site": "pokerstars",
+      "game_type": "tournament",
+      "hand_id": "200000000001",
+      "features": ["six_max", "antes", "three_bet", "showdown"]
+    }
+  ]
+}

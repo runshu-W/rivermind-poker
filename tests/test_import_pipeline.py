@@ -82,7 +82,7 @@ class ImportPipelineTest(unittest.TestCase):
         self.assertEqual(report.items[0].error_code, "pokerstars_missing_table")
         self.assertEqual(self.store.hand_count(), 1)
 
-    def test_unknown_and_tournament_formats_are_reported_as_unsupported(self) -> None:
+    def test_unknown_and_malformed_tournament_formats_are_visible(self) -> None:
         unknown = self.importer.import_text("unknown.txt", "Unknown room hand #1")
         tournament_text = self.raw_hand.replace(
             "Hold'em No Limit ($0.05/$0.10 USD)",
@@ -93,10 +93,10 @@ class ImportPipelineTest(unittest.TestCase):
 
         self.assertEqual(unknown.unsupported, 1)
         self.assertEqual(unknown.items[0].error_code, "unknown_format")
-        self.assertEqual(tournament.unsupported, 1)
+        self.assertEqual(tournament.failed, 1)
         self.assertEqual(
             tournament.items[0].error_code,
-            "pokerstars_tournament_not_supported",
+            "pokerstars_malformed_tournament_header",
         )
 
     def test_persisted_batch_report_matches_result(self) -> None:

@@ -14,15 +14,16 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 
 ## 当前状态
 
-项目处于 Phase 0。第一条可运行的导入纵向切片已经建立：
+项目处于 Phase 0。导入与基础统计两条纵向切片已经建立：
 
 - 规范化手牌领域模型；
 - 可插拔牌谱解析器接口；
-- PokerStars 英文现金桌文本解析器 v0.2；
+- PokerStars 英文现金桌与 MTT 文本解析器，支持付费赛、免费赛、ante 和赛事级别；
 - 多手拆分、来源识别、逐手错误隔离和稳定指纹去重；
 - SQLite 本地事务存储、可恢复批次报告和原始牌谱回放；
 - 文件/文件夹导入 CLI，以及成功、重复、失败、不支持四类结果；
-- 13 项自动化测试和可重复的批量导入基准脚本；
+- 确定性 VPIP、PFR、RFI、3Bet 统计，保留发生次数与机会次数；
+- 20 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -32,6 +33,9 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 ```powershell
 $env:PYTHONPATH = "src"
 python -m rivermind_core import tests/fixtures --database data/dev.db
+
+# 默认统计牌谱中标记的 Hero；也可使用 --player 指定玩家
+python -m rivermind_core stats --database data/dev.db
 
 # 运行测试
 $env:PYTHONPATH = "src"
@@ -64,7 +68,7 @@ docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
-导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)。
+导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)。
 
 ## 产品边界
 

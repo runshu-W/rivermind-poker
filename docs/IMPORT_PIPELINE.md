@@ -44,9 +44,9 @@ python -m rivermind_core import tests/fixtures --database data/rivermind.db --js
 
 ## 当前基准与限制
 
-2026-08-18 在当前开发环境运行合成 10,000 手基准：2.278 秒，约 4,391 手/秒，SQLite 文件约 51.46 MB。输入是已提交黄金牌谱的不同手牌 ID 变体，只用于发现性能回退，不代表真实牌谱覆盖率。
+2026-08-18 在当前开发环境运行合成 10,000 手基准：导入 2.340 秒，约 4,274 手/秒；随后计算首批统计用时 0.641 秒，约 15,608 手/秒；SQLite 文件约 51.46 MB。输入是已提交黄金牌谱的不同手牌 ID 变体，只用于发现性能回退，不代表真实牌谱覆盖率。
 
-当前仅支持 PokerStars 英文现金桌基础格式。MTT、第二个平台、更多真实匿名黄金牌谱、100k/1M 批量基准和统计分析物理模型是后续工作。运行基准：
+当前支持 PokerStars 英文现金桌，以及带常规买入或 Freeroll 标识的基础 MTT 格式。第二个平台、更多经过授权的真实匿名黄金牌谱、100k/1M 批量基准和统计分析物理模型是后续工作。`tests/fixtures/manifest.json` 明确记录样本来源，当前样本均为合成代表性牌谱，不冒充真实用户数据。运行基准：
 
 ```powershell
 python benchmarks/import_benchmark.py --hands 10000

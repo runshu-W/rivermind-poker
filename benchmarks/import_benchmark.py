@@ -14,6 +14,7 @@ sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 
 from rivermind_core.importer import HandHistoryImporter  # noqa: E402
 from rivermind_core.parsers import default_registry  # noqa: E402
+from rivermind_core.stats import calculate_player_stats  # noqa: E402
 from rivermind_core.storage import SQLiteHandStore  # noqa: E402
 
 
@@ -40,12 +41,19 @@ def main() -> int:
             report = HandHistoryImporter(default_registry(), store).import_text(
                 "synthetic-benchmark.txt", raw_text
             )
-        elapsed = time.perf_counter() - started
+            import_elapsed = time.perf_counter() - started
+            stats_started = time.perf_counter()
+            stats = calculate_player_stats(store.iter_hands(), heroes_only=True)
+            stats_elapsed = time.perf_counter() - stats_started
+        if not stats or stats[0].hands != args.hands:
+            raise RuntimeError("Stats benchmark did not observe every imported hand")
         result = {
             "hands": args.hands,
             "imported": report.imported,
-            "elapsed_seconds": round(elapsed, 3),
-            "hands_per_second": round(args.hands / elapsed),
+            "import_elapsed_seconds": round(import_elapsed, 3),
+            "import_hands_per_second": round(args.hands / import_elapsed),
+            "stats_elapsed_seconds": round(stats_elapsed, 3),
+            "stats_hands_per_second": round(args.hands / stats_elapsed),
             "database_mb": round(database.stat().st_size / 1024 / 1024, 2),
             "fixture": "synthetic variants of the committed golden hand",
         }

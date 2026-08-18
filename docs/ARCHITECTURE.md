@@ -29,13 +29,13 @@ flowchart LR
 
 | 模块 | 责任 | 当前状态 |
 |---|---|---|
-| Canonical Model | 玩家、筹码、行动、街道、牌面与结算 | 已建立 v0.1 |
+| Canonical Model | 玩家、筹码、行动、街道、牌面、现金/赛事元数据与结算 | 已建立 v0.2 |
 | Parser Registry | 识别来源并路由到站点解析器 | 已建立 v0.1 |
-| PokerStars Parser | 英文现金桌文本解析 | v0.2，MTT 待实现 |
+| PokerStars Parser | 英文现金桌、付费 MTT、Freeroll 文本解析 | Cash v3 / MTT v1 |
 | Import Pipeline | 文件扫描、拆手、去重、失败隔离 | v0.1 已实现 |
 | Import Store | 导入审计、规范化 JSON、原文回放 | SQLite v0.1 已实现 |
 | Analytics Store | 统计查询的宽表/列式存储 | DuckDB/Parquet 待基准决定 |
-| Stats Engine | 固定核心指标和过滤 | 待实现 |
+| Stats Engine | 固定核心指标和机会分母 | VPIP/PFR/RFI/3Bet v0.1 |
 | Leak Engine | 基于证据的漏洞规则 | 待实现 |
 | AI Coach | 证据约束解释 | 待实现 |
 | GTO Matcher | 映射到验证解法 | Beta 可选 |

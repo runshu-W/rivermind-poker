@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -196,6 +197,20 @@ class SQLiteHandStore:
         if row is None:
             return None
         return hand_from_json(row["payload_json"], raw_text=row["raw_text"])
+
+    def iter_hands(
+        self, *, batch_size: int = 1000, include_raw: bool = False
+    ) -> Iterator[HandHistory]:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        columns = "payload_json, raw_text" if include_raw else "payload_json"
+        cursor = self._connection.execute(
+            f"SELECT {columns} FROM hands ORDER BY row_id"
+        )
+        while rows := cursor.fetchmany(batch_size):
+            for row in rows:
+                raw_text = row["raw_text"] if include_raw else ""
+                yield hand_from_json(row["payload_json"], raw_text=raw_text)
 
     def get_batch_report(self, batch_id: str) -> ImportBatchReport | None:
         batch = self._connection.execute(

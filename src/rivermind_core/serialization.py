@@ -53,6 +53,10 @@ def hand_to_json(hand: HandHistory) -> str:
         "board": list(hand.board),
         "total_pot": _decimal_to_json(hand.total_pot),
         "rake": _decimal_to_json(hand.rake),
+        "tournament_id": hand.tournament_id,
+        "tournament_level": hand.tournament_level,
+        "buy_in": _decimal_to_json(hand.buy_in),
+        "fee": _decimal_to_json(hand.fee),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -97,6 +101,10 @@ def hand_from_json(payload_json: str, *, raw_text: str = "") -> HandHistory:
         board=tuple(payload["board"]),
         total_pot=_decimal_from_json(payload["total_pot"]),
         rake=_decimal_from_json(payload["rake"]),
+        tournament_id=payload.get("tournament_id"),
+        tournament_level=payload.get("tournament_level"),
+        buy_in=_decimal_from_json(payload.get("buy_in")),
+        fee=_decimal_from_json(payload.get("fee")),
         raw_text=raw_text,
     )
 

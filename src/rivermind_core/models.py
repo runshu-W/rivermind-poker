@@ -101,6 +101,10 @@ class HandHistory:
     board: tuple[str, ...] = ()
     total_pot: Decimal | None = None
     rake: Decimal | None = None
+    tournament_id: str | None = None
+    tournament_level: str | None = None
+    buy_in: Decimal | None = None
+    fee: Decimal | None = None
     raw_text: str = field(default="", repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -112,6 +116,14 @@ class HandHistory:
             raise HandValidationError("Blind values are invalid")
         if self.small_blind > self.big_blind:
             raise HandValidationError("Small blind cannot exceed big blind")
+        if self.game_type == GameType.TOURNAMENT and not self.tournament_id:
+            raise HandValidationError("Tournament hands require a tournament id")
+        if self.game_type == GameType.CASH and self.tournament_id is not None:
+            raise HandValidationError("Cash hands cannot have a tournament id")
+        if self.buy_in is not None and self.buy_in < 0:
+            raise HandValidationError("Tournament buy-in cannot be negative")
+        if self.fee is not None and self.fee < 0:
+            raise HandValidationError("Tournament fee cannot be negative")
 
         seats = [player.seat for player in self.players]
         names = [player.name for player in self.players]
@@ -121,6 +133,13 @@ class HandHistory:
             raise HandValidationError("Player names must be unique")
         if self.button_seat not in seats:
             raise HandValidationError("Button seat must belong to a player")
+        unknown_action_players = {
+            action.player for action in self.actions if action.player not in names
+        }
+        if unknown_action_players:
+            raise HandValidationError(
+                f"Actions reference unknown players: {sorted(unknown_action_players)}"
+            )
 
         _validate_cards(self.board)
         if len(self.board) not in (0, 3, 4, 5):

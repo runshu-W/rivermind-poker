@@ -1,0 +1,44 @@
+PokerStars Hand #200000000001: Tournament #900000001, $10.00+$1.00 USD Hold'em No Limit - Level III (25/50) - 2026/08/18 13:00:00 ET
+Table '900000001 12' 6-max Seat #6 is the button
+Seat 1: SmallBlind (3000 in chips)
+Seat 2: BigBlind (2950 in chips)
+Seat 3: Hero (3200 in chips)
+Seat 4: Villain (4100 in chips)
+Seat 5: Cutoff (2750 in chips)
+Seat 6: Button (3500 in chips)
+SmallBlind: posts the ante 5
+BigBlind: posts the ante 5
+Hero: posts the ante 5
+Villain: posts the ante 5
+Cutoff: posts the ante 5
+Button: posts the ante 5
+SmallBlind: posts small blind 25
+BigBlind: posts big blind 50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kd]
+Hero: raises 50 to 100
+Villain: raises 200 to 300
+Cutoff: folds
+Button: folds
+SmallBlind: folds
+BigBlind: folds
+Hero: calls 200
+*** FLOP *** [2c 7d Ts]
+Hero: checks
+Villain: bets 200
+Hero: calls 200
+*** TURN *** [2c 7d Ts] [As]
+Hero: checks
+Villain: checks
+*** RIVER *** [2c 7d Ts As] [4h]
+Hero: checks
+Villain: checks
+*** SHOW DOWN ***
+Hero: shows [Ah Kd] (a pair of Aces)
+Villain: shows [Qs Qh] (a pair of Queens)
+Hero collected 1080 from pot
+*** SUMMARY ***
+Total pot 1080 | Rake 0
+Board [2c 7d Ts As 4h]
+Seat 3: Hero showed [Ah Kd] and won (1080) with a pair of Aces
+Seat 4: Villain showed [Qs Qh] and lost with a pair of Queens
