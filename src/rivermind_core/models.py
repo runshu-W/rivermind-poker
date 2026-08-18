@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from enum import StrEnum
 
@@ -16,6 +16,19 @@ class HandValidationError(ValueError):
 class GameType(StrEnum):
     CASH = "cash"
     TOURNAMENT = "tournament"
+
+
+class PlayerPosition(StrEnum):
+    SMALL_BLIND = "SB"
+    BIG_BLIND = "BB"
+    UNDER_THE_GUN = "UTG"
+    UNDER_THE_GUN_1 = "UTG+1"
+    UNDER_THE_GUN_2 = "UTG+2"
+    UNDER_THE_GUN_3 = "UTG+3"
+    LOJACK = "LJ"
+    HIJACK = "HJ"
+    CUTOFF = "CO"
+    BUTTON = "BTN"
 
 
 class BettingRound(StrEnum):
@@ -48,6 +61,9 @@ class Player:
     starting_stack: Decimal
     is_hero: bool = False
     hole_cards: tuple[str, ...] = ()
+    position: PlayerPosition | None = None
+    starting_stack_bb: Decimal | None = None
+    effective_stack_bb: Decimal | None = None
 
     def __post_init__(self) -> None:
         if self.seat <= 0:
@@ -58,6 +74,10 @@ class Player:
             raise HandValidationError("Starting stack cannot be negative")
         if len(self.hole_cards) not in (0, 2):
             raise HandValidationError("Hold'em players must have zero or two known cards")
+        if self.starting_stack_bb is not None and self.starting_stack_bb < 0:
+            raise HandValidationError("Starting stack in BB cannot be negative")
+        if self.effective_stack_bb is not None and self.effective_stack_bb < 0:
+            raise HandValidationError("Effective stack in BB cannot be negative")
         _validate_cards(self.hole_cards)
 
 
@@ -165,3 +185,101 @@ def _validate_cards(cards: tuple[str, ...] | list[str]) -> None:
     invalid = [card for card in cards if not CARD_PATTERN.fullmatch(card)]
     if invalid:
         raise HandValidationError(f"Invalid card codes: {invalid}")
+
+
+def enrich_player_context(
+    players: tuple[Player, ...] | list[Player],
+    *,
+    button_seat: int,
+    big_blind: Decimal,
+) -> tuple[Player, ...]:
+    """Assign canonical positions and preflop table-effective stacks."""
+
+    if big_blind <= 0:
+        raise HandValidationError("Big blind must be positive")
+    ordered = sorted(players, key=lambda player: player.seat)
+    button_index = next(
+        (index for index, player in enumerate(ordered) if player.seat == button_seat),
+        None,
+    )
+    if button_index is None:
+        raise HandValidationError("Button seat must belong to a player")
+
+    clockwise = ordered[button_index + 1 :] + ordered[: button_index + 1]
+    positions = _positions_for_player_count(len(clockwise))
+    position_by_name = {
+        player.name: position for player, position in zip(clockwise, positions, strict=True)
+    }
+
+    enriched: list[Player] = []
+    for player in players:
+        largest_opponent_stack = max(
+            opponent.starting_stack
+            for opponent in players
+            if opponent.name != player.name
+        )
+        enriched.append(
+            replace(
+                player,
+                position=position_by_name[player.name],
+                starting_stack_bb=player.starting_stack / big_blind,
+                effective_stack_bb=(
+                    min(player.starting_stack, largest_opponent_stack) / big_blind
+                ),
+            )
+        )
+    return tuple(enriched)
+
+
+def _positions_for_player_count(count: int) -> tuple[PlayerPosition, ...]:
+    if not 2 <= count <= 10:
+        raise HandValidationError("Position assignment supports 2 to 10 players")
+    if count == 2:
+        return (PlayerPosition.BIG_BLIND, PlayerPosition.BUTTON)
+
+    middle_positions = {
+        0: (),
+        1: (PlayerPosition.CUTOFF,),
+        2: (PlayerPosition.UNDER_THE_GUN, PlayerPosition.CUTOFF),
+        3: (
+            PlayerPosition.UNDER_THE_GUN,
+            PlayerPosition.HIJACK,
+            PlayerPosition.CUTOFF,
+        ),
+        4: (
+            PlayerPosition.UNDER_THE_GUN,
+            PlayerPosition.LOJACK,
+            PlayerPosition.HIJACK,
+            PlayerPosition.CUTOFF,
+        ),
+        5: (
+            PlayerPosition.UNDER_THE_GUN,
+            PlayerPosition.UNDER_THE_GUN_1,
+            PlayerPosition.LOJACK,
+            PlayerPosition.HIJACK,
+            PlayerPosition.CUTOFF,
+        ),
+        6: (
+            PlayerPosition.UNDER_THE_GUN,
+            PlayerPosition.UNDER_THE_GUN_1,
+            PlayerPosition.UNDER_THE_GUN_2,
+            PlayerPosition.LOJACK,
+            PlayerPosition.HIJACK,
+            PlayerPosition.CUTOFF,
+        ),
+        7: (
+            PlayerPosition.UNDER_THE_GUN,
+            PlayerPosition.UNDER_THE_GUN_1,
+            PlayerPosition.UNDER_THE_GUN_2,
+            PlayerPosition.UNDER_THE_GUN_3,
+            PlayerPosition.LOJACK,
+            PlayerPosition.HIJACK,
+            PlayerPosition.CUTOFF,
+        ),
+    }[count - 3]
+    return (
+        PlayerPosition.SMALL_BLIND,
+        PlayerPosition.BIG_BLIND,
+        *middle_positions,
+        PlayerPosition.BUTTON,
+    )

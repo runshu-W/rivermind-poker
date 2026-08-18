@@ -11,6 +11,7 @@ from rivermind_core.models import (
     GameType,
     HandHistory,
     Player,
+    enrich_player_context,
 )
 
 from .base import (
@@ -94,7 +95,7 @@ class _Header:
 class PokerStarsCashParser(HandHistoryParser):
     """PokerStars English cash-game parser with strict action handling."""
 
-    name = "pokerstars_cash_v3"
+    name = "pokerstars_cash_v4"
 
     def can_parse(self, raw_text: str) -> bool:
         first_line = raw_text.lstrip().splitlines()[0]
@@ -128,7 +129,7 @@ class PokerStarsCashParser(HandHistoryParser):
 class PokerStarsTournamentParser(HandHistoryParser):
     """PokerStars English paid-entry and freeroll tournament parser."""
 
-    name = "pokerstars_tournament_v1"
+    name = "pokerstars_tournament_v2"
 
     def can_parse(self, raw_text: str) -> bool:
         first_line = raw_text.lstrip().splitlines()[0]
@@ -270,6 +271,14 @@ def _parse_body(lines: list[str], raw_text: str, header: _Header) -> HandHistory
                 f"Unsupported PokerStars action line: {line}",
                 code="pokerstars_unsupported_action",
             )
+
+    players = list(
+        enrich_player_context(
+            players,
+            button_seat=int(table_line.group("button_seat")),
+            big_blind=header.big_blind,
+        )
+    )
 
     return HandHistory(
         site="pokerstars",

@@ -14,7 +14,6 @@ sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 
 from rivermind_core.importer import HandHistoryImporter  # noqa: E402
 from rivermind_core.parsers import default_registry  # noqa: E402
-from rivermind_core.stats import calculate_player_stats  # noqa: E402
 from rivermind_core.storage import SQLiteHandStore  # noqa: E402
 
 
@@ -43,7 +42,7 @@ def main() -> int:
             )
             import_elapsed = time.perf_counter() - started
             stats_started = time.perf_counter()
-            stats = calculate_player_stats(store.iter_hands(), heroes_only=True)
+            stats = store.query_player_stats(heroes_only=True)
             stats_elapsed = time.perf_counter() - stats_started
         if not stats or stats[0].hands != args.hands:
             raise RuntimeError("Stats benchmark did not observe every imported hand")

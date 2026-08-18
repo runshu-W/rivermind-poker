@@ -59,6 +59,7 @@ class ImportPipelineTest(unittest.TestCase):
         self.assertEqual(first.imported, 2)
         self.assertEqual(second.duplicates, 2)
         self.assertEqual(self.store.hand_count(), 2)
+        self.assertEqual(self.store.stat_row_count(), 4)
         restored = self.store.load_hand("pokerstars", "100000000001")
         self.assertIsNotNone(restored)
         assert restored is not None

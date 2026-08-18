@@ -11,6 +11,8 @@ from rivermind_core.models import (
     GameType,
     HandHistory,
     Player,
+    PlayerPosition,
+    enrich_player_context,
 )
 
 
@@ -34,6 +36,11 @@ def hand_to_json(hand: HandHistory) -> str:
                 "starting_stack": str(player.starting_stack),
                 "is_hero": player.is_hero,
                 "hole_cards": list(player.hole_cards),
+                "position": (
+                    None if player.position is None else player.position.value
+                ),
+                "starting_stack_bb": _decimal_to_json(player.starting_stack_bb),
+                "effective_stack_bb": _decimal_to_json(player.effective_stack_bb),
             }
             for player in hand.players
         ],
@@ -63,6 +70,34 @@ def hand_to_json(hand: HandHistory) -> str:
 
 def hand_from_json(payload_json: str, *, raw_text: str = "") -> HandHistory:
     payload: dict[str, Any] = json.loads(payload_json)
+    players = tuple(
+        Player(
+            seat=item["seat"],
+            name=item["name"],
+            starting_stack=Decimal(item["starting_stack"]),
+            is_hero=item["is_hero"],
+            hole_cards=tuple(item["hole_cards"]),
+            position=(
+                None
+                if item.get("position") is None
+                else PlayerPosition(item["position"])
+            ),
+            starting_stack_bb=_decimal_from_json(item.get("starting_stack_bb")),
+            effective_stack_bb=_decimal_from_json(item.get("effective_stack_bb")),
+        )
+        for item in payload["players"]
+    )
+    if any(
+        player.position is None
+        or player.starting_stack_bb is None
+        or player.effective_stack_bb is None
+        for player in players
+    ):
+        players = enrich_player_context(
+            players,
+            button_seat=payload["button_seat"],
+            big_blind=Decimal(payload["big_blind"]),
+        )
     return HandHistory(
         site=payload["site"],
         hand_id=payload["hand_id"],
@@ -75,16 +110,7 @@ def hand_from_json(payload_json: str, *, raw_text: str = "") -> HandHistory:
         small_blind=Decimal(payload["small_blind"]),
         big_blind=Decimal(payload["big_blind"]),
         played_at_raw=payload["played_at_raw"],
-        players=tuple(
-            Player(
-                seat=item["seat"],
-                name=item["name"],
-                starting_stack=Decimal(item["starting_stack"]),
-                is_hero=item["is_hero"],
-                hole_cards=tuple(item["hole_cards"]),
-            )
-            for item in payload["players"]
-        ),
+        players=players,
         actions=tuple(
             Action(
                 sequence=item["sequence"],

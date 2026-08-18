@@ -8,6 +8,8 @@ from .models import (
     HandHistory,
     HandValidationError,
     Player,
+    PlayerPosition,
+    enrich_player_context,
 )
 from .importer import (
     HandHistoryImporter,
@@ -17,7 +19,15 @@ from .importer import (
     split_hand_histories,
 )
 from .storage import SQLiteHandStore
-from .stats import PlayerStats, StatValue, calculate_player_stats
+from .stats import (
+    PlayerHandStatRow,
+    PlayerStats,
+    StatValue,
+    StatsFilter,
+    aggregate_player_stat_rows,
+    build_player_hand_stat_rows,
+    calculate_player_stats,
+)
 
 __all__ = [
     "Action",
@@ -31,9 +41,15 @@ __all__ = [
     "ImportItemResult",
     "ImportItemStatus",
     "Player",
+    "PlayerPosition",
+    "PlayerHandStatRow",
     "PlayerStats",
     "SQLiteHandStore",
     "StatValue",
+    "StatsFilter",
+    "aggregate_player_stat_rows",
+    "build_player_hand_stat_rows",
     "calculate_player_stats",
+    "enrich_player_context",
     "split_hand_histories",
 ]

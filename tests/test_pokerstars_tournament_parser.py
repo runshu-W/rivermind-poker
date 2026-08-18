@@ -10,7 +10,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 
-from rivermind_core import ActionType, GameType  # noqa: E402
+from rivermind_core import ActionType, GameType, PlayerPosition  # noqa: E402
 from rivermind_core.parsers import (  # noqa: E402
     PokerStarsTournamentParser,
     default_registry,
@@ -38,6 +38,21 @@ class PokerStarsTournamentParserTest(unittest.TestCase):
         self.assertEqual(hand.small_blind, Decimal("25"))
         self.assertEqual(hand.big_blind, Decimal("50"))
         self.assertEqual(hand.max_seats, 6)
+        positions = {player.name: player.position for player in hand.players}
+        self.assertEqual(
+            positions,
+            {
+                "SmallBlind": PlayerPosition.SMALL_BLIND,
+                "BigBlind": PlayerPosition.BIG_BLIND,
+                "Hero": PlayerPosition.UNDER_THE_GUN,
+                "Villain": PlayerPosition.HIJACK,
+                "Cutoff": PlayerPosition.CUTOFF,
+                "Button": PlayerPosition.BUTTON,
+            },
+        )
+        assert hand.hero is not None
+        self.assertEqual(hand.hero.starting_stack_bb, Decimal("64"))
+        self.assertEqual(hand.hero.effective_stack_bb, Decimal("64"))
 
     def test_parses_antes_three_bet_board_and_showdown_cards(self) -> None:
         hand = PokerStarsTournamentParser().parse(self.raw_hand)

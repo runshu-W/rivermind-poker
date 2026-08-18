@@ -10,7 +10,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 
-from rivermind_core import ActionType, BettingRound  # noqa: E402
+from rivermind_core import ActionType, BettingRound, PlayerPosition  # noqa: E402
 from rivermind_core.parsers import (  # noqa: E402
     HandHistoryParseError,
     PokerStarsCashParser,
@@ -48,6 +48,9 @@ class PokerStarsCashParserTest(unittest.TestCase):
         assert hand.hero is not None
         self.assertEqual(hand.hero.name, "Hero")
         self.assertEqual(hand.hero.hole_cards, ("Ah", "Kd"))
+        self.assertEqual(hand.hero.position, PlayerPosition.BUTTON)
+        self.assertEqual(hand.hero.starting_stack_bb, Decimal("100"))
+        self.assertEqual(hand.hero.effective_stack_bb, Decimal("100"))
 
     def test_normalizes_action_sequence_and_streets(self) -> None:
         hand = default_registry().parse(self.raw_hand)

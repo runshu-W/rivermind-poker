@@ -22,8 +22,10 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 - 多手拆分、来源识别、逐手错误隔离和稳定指纹去重；
 - SQLite 本地事务存储、可恢复批次报告和原始牌谱回放；
 - 文件/文件夹导入 CLI，以及成功、重复、失败、不支持四类结果；
-- 确定性 VPIP、PFR、RFI、3Bet 统计，保留发生次数与机会次数；
-- 20 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
+- 确定性 VPIP、PFR、RFI、3Bet、Call Open、Cold Call、Fold to 3Bet、Flop CBet 与 Fold to Flop CBet；
+- 位置、起始/有效筹码 BB 标准化，以及可索引的玩家–手牌统计宽表；
+- 按赛制、位置、有效筹码过滤的 Python API 和 CLI；
+- 25 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -36,6 +38,10 @@ python -m rivermind_core import tests/fixtures --database data/dev.db
 
 # 默认统计牌谱中标记的 Hero；也可使用 --player 指定玩家
 python -m rivermind_core stats --database data/dev.db
+
+# 示例：只看 40–80bb 的 UTG/HJ MTT
+python -m rivermind_core stats --database data/dev.db --game-type tournament `
+  --position UTG HJ --min-effective-stack-bb 40 --max-effective-stack-bb 80
 
 # 运行测试
 $env:PYTHONPATH = "src"

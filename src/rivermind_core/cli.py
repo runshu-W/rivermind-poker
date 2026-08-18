@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Sequence
 
 from rivermind_core.importer import HandHistoryImporter, ImportBatchReport
-from rivermind_core.models import GameType
+from rivermind_core.models import GameType, PlayerPosition
 from rivermind_core.parsers import default_registry
-from rivermind_core.stats import PlayerStats, StatValue, calculate_player_stats
+from rivermind_core.stats import PlayerStats, StatValue, StatsFilter
 from rivermind_core.storage import SQLiteHandStore
 
 
@@ -42,6 +43,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stats_parser.add_argument(
         "--game-type", choices=[item.value for item in GameType]
+    )
+    stats_parser.add_argument(
+        "--position",
+        nargs="+",
+        choices=[item.value for item in PlayerPosition],
+        help="Include one or more canonical positions",
+    )
+    stats_parser.add_argument(
+        "--min-effective-stack-bb", type=Decimal
+    )
+    stats_parser.add_argument(
+        "--max-effective-stack-bb", type=Decimal
     )
     stats_parser.add_argument(
         "--json", action="store_true", help="Print a machine-readable report"
@@ -90,17 +103,30 @@ def _run_stats(args: argparse.Namespace) -> int:
         print(f"error: database does not exist: {args.database}", file=sys.stderr)
         return 2
 
+    try:
+        stat_filter = StatsFilter(
+            game_types=(
+                frozenset({GameType(args.game_type)})
+                if args.game_type is not None
+                else frozenset()
+            ),
+            positions=(
+                frozenset(PlayerPosition(item) for item in args.position)
+                if args.position
+                else frozenset()
+            ),
+            min_effective_stack_bb=args.min_effective_stack_bb,
+            max_effective_stack_bb=args.max_effective_stack_bb,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     with SQLiteHandStore(args.database) as store:
-        hand_stream = store.iter_hands()
-        if args.game_type is not None:
-            game_type = GameType(args.game_type)
-            hands = (hand for hand in hand_stream if hand.game_type == game_type)
-        else:
-            hands = hand_stream
-        stats = calculate_player_stats(
-            hands,
+        stats = store.query_player_stats(
             player_name=args.player,
             heroes_only=args.player is None and not args.all_players,
+            stat_filter=stat_filter,
         )
 
     if args.json:
@@ -111,6 +137,17 @@ def _run_stats(args: argparse.Namespace) -> int:
                         "player": args.player,
                         "heroes_only": args.player is None and not args.all_players,
                         "game_type": args.game_type,
+                        "positions": args.position,
+                        "min_effective_stack_bb": (
+                            None
+                            if args.min_effective_stack_bb is None
+                            else str(args.min_effective_stack_bb)
+                        ),
+                        "max_effective_stack_bb": (
+                            None
+                            if args.max_effective_stack_bb is None
+                            else str(args.max_effective_stack_bb)
+                        ),
                     },
                     "players": [_player_stats_dict(item) for item in stats],
                 },
@@ -207,6 +244,11 @@ def _player_stats_dict(stats: PlayerStats) -> dict[str, object]:
         "pfr": _stat_value_dict(stats.pfr),
         "rfi": _stat_value_dict(stats.rfi),
         "three_bet": _stat_value_dict(stats.three_bet),
+        "call_open": _stat_value_dict(stats.call_open),
+        "cold_call": _stat_value_dict(stats.cold_call),
+        "fold_to_three_bet": _stat_value_dict(stats.fold_to_three_bet),
+        "flop_cbet": _stat_value_dict(stats.flop_cbet),
+        "fold_to_flop_cbet": _stat_value_dict(stats.fold_to_flop_cbet),
     }
 
 
@@ -224,12 +266,19 @@ def _print_stats(stats: Sequence[PlayerStats]) -> None:
     if not stats:
         print("No matching hands found")
         return
-    print("Player                 Hands       VPIP        PFR        RFI       3Bet")
+    print(
+        "Player                 Hands    VPIP     PFR     RFI    3Bet   "
+        "CallOp  ColdCall   F3Bet   FCBet  FoldFCB"
+    )
     for item in stats:
         print(
             f"{item.player_name[:20]:20} {item.hands:5d} "
-            f"{_format_stat(item.vpip):>10} {_format_stat(item.pfr):>10} "
-            f"{_format_stat(item.rfi):>10} {_format_stat(item.three_bet):>10}"
+            f"{_format_stat(item.vpip):>7} {_format_stat(item.pfr):>7} "
+            f"{_format_stat(item.rfi):>7} {_format_stat(item.three_bet):>7} "
+            f"{_format_stat(item.call_open):>7} {_format_stat(item.cold_call):>9} "
+            f"{_format_stat(item.fold_to_three_bet):>7} "
+            f"{_format_stat(item.flop_cbet):>7} "
+            f"{_format_stat(item.fold_to_flop_cbet):>8}"
         )
 
 

@@ -31,18 +31,18 @@ flowchart LR
 |---|---|---|
 | Canonical Model | 玩家、筹码、行动、街道、牌面、现金/赛事元数据与结算 | 已建立 v0.2 |
 | Parser Registry | 识别来源并路由到站点解析器 | 已建立 v0.1 |
-| PokerStars Parser | 英文现金桌、付费 MTT、Freeroll 文本解析 | Cash v3 / MTT v1 |
+| PokerStars Parser | 英文现金桌、付费 MTT、Freeroll 文本解析 | Cash v4 / MTT v2 |
 | Import Pipeline | 文件扫描、拆手、去重、失败隔离 | v0.1 已实现 |
 | Import Store | 导入审计、规范化 JSON、原文回放 | SQLite v0.1 已实现 |
-| Analytics Store | 统计查询的宽表/列式存储 | DuckDB/Parquet 待基准决定 |
-| Stats Engine | 固定核心指标和机会分母 | VPIP/PFR/RFI/3Bet v0.1 |
+| Analytics Store | 玩家–手牌统计宽表与维度索引 | SQLite v0.2，列式方案待百万手基准 |
+| Stats Engine | 固定核心指标和机会分母 | 9 项翻前/Flop 指标 v0.2 |
 | Leak Engine | 基于证据的漏洞规则 | 待实现 |
 | AI Coach | 证据约束解释 | 待实现 |
 | GTO Matcher | 映射到验证解法 | Beta 可选 |
 
 ## 当前存储边界
 
-SQLite 只承担 Beta 的本地事务系统职责：导入批次、逐手状态、规范化载荷、原文和去重索引。统计引擎不直接依赖 SQLite 的物理结构；后续会依据 100k/1M 手牌基准，在 SQLite 派生表与 DuckDB/Parquet 之间选择分析存储。这样可以先交付可靠导入，又不提前锁死长期列式架构。
+SQLite 承担 Beta 的本地事务系统职责：导入批次、逐手状态、规范化载荷、原文、去重索引和 `player_hand_stats` 派生宽表。宽表与原手牌在同一事务写入，并按玩家、Hero、赛制、位置和有效筹码建立索引；v1 数据库首次打开时自动回填。后续依据 100k/1M 手牌基准决定是否把同一逻辑宽表迁移到 DuckDB/Parquet。
 
 ## 长期边界
 
