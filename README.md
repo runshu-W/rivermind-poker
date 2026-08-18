@@ -105,7 +105,7 @@ docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
-导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)，GTO 节点、目录与匹配边界见 [docs/GTO_MATCHER.md](docs/GTO_MATCHER.md)。
+交接给下一位开发者或 AI 编程代理时，先阅读 [docs/CLAUDE_HANDOFF.md](docs/CLAUDE_HANDOFF.md)。导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)，GTO 节点、目录与匹配边界见 [docs/GTO_MATCHER.md](docs/GTO_MATCHER.md)。
 
 ## 产品边界
 
