@@ -9,7 +9,8 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 ```
 
 - Beta：离线牌谱导入、标准化、Session 报告、固定核心统计、手牌回放、漏洞识别和证据约束的 AI 解释。
-- 下一阶段：把高频错误映射到经过验证的 GTO 解法，形成 Study → Practice 闭环。
+- 当前 GTO 底座：从真实牌谱提取决策前节点，并对版本化解法目录返回精确、阈值内近似或不支持；尚未导入真实策略制品。
+- 下一阶段：验证首批策略制品，把高频错误映射到可追溯解法，形成 Study → Practice 闭环。
 - 长期：预计算解法库、专用策略/价值网络、定制求解和教学 Bot。LLM 不直接决定扑克行动。
 
 ## 当前状态
@@ -34,7 +35,9 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 - 版本化中文提示词、严格 JSON Schema，以及默认关闭且必须显式授权的 OpenAI Responses 适配器；
 - 50 个不同证据、双专家评分、零 fatal error 的盲审质量门；当前尚未收集真实专家结果；
 - 默认报告仍使用确定性模板；所有自动化测试均为本地假传输，没有向第三方发送牌谱数据；
-- 69 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
+- `GameSpec/SolutionSpec/SolutionCatalog` 严格版本契约、决策前节点指纹、精确/近似/不支持匹配和逐字段差异；
+- 默认解法目录为空，不包含伪造频率、EV 或“已验证”测试解法；
+- 81 项自动化测试、黄金集清单和含 1,000 节点匹配的可重复性能基准；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -56,6 +59,11 @@ python -m rivermind_core coach-eval --json
 python -m rivermind_core coach-review-score completed-review.json --json
 python -m rivermind_core hands --database data/dev.db --metric flop_cbet --occurred
 python -m rivermind_core replay pokerstars 100000000001 --database data/dev.db --json
+
+# 将真实决策前节点与目录比较；默认空目录会诚实返回 unsupported
+python -m rivermind_core gto-match pokerstars 100000000001 `
+  --before-action 5 --database data/dev.db --catalog solutions/catalog.json `
+  --rake-model pokerstars.cash.example --rake-percent 5 --rake-cap-bb 3 --json
 
 # 生成第一个本地分析页面
 python -m rivermind_core report --database data/dev.db --output data/report.html
@@ -92,11 +100,12 @@ src/rivermind_core/      牌谱标准化与领域核心
 tests/                   黄金牌谱和单元测试
 evals/                   AI 教练合同与对抗性评测语料
 benchmarks/              可重复的导入性能基准
+solutions/               严格版本化解法目录；当前为空
 docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
-导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)。
+导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)，漏洞规则见 [docs/LEAK_ENGINE.md](docs/LEAK_ENGINE.md)，AI 教练证据与校验协议见 [docs/AI_COACH.md](docs/AI_COACH.md)，运行时与离线评测门见 [docs/COACH_RUNTIME_EVALS.md](docs/COACH_RUNTIME_EVALS.md)，可选连接器与专家质量门见 [docs/OPENAI_COACH_ADAPTER.md](docs/OPENAI_COACH_ADAPTER.md)，GTO 节点、目录与匹配边界见 [docs/GTO_MATCHER.md](docs/GTO_MATCHER.md)。
 
 ## 产品边界
 

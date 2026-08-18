@@ -32,6 +32,17 @@ from rivermind_core.coach_runtime import (
     run_coach_provider,
 )
 from rivermind_core.html_report import render_analysis_page
+from rivermind_core.gto_matcher import (
+    MatchStatus,
+    extract_decision_game_spec,
+    match_game_spec,
+)
+from rivermind_core.gto_specs import (
+    RakeSpec,
+    SolutionObjective,
+    SpecValidationError,
+    load_solution_catalog,
+)
 from rivermind_core.importer import HandHistoryImporter, ImportBatchReport
 from rivermind_core.leaks import LeakAssessment, LeakReport, LeakStatus
 from rivermind_core.models import GameType, PlayerPosition
@@ -171,6 +182,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_database_argument(replay_parser)
     replay_parser.add_argument("--json", action="store_true")
 
+    gto_match_parser = subparsers.add_parser(
+        "gto-match",
+        help="Match one real decision node to a versioned solution catalog",
+    )
+    gto_match_parser.add_argument("site")
+    gto_match_parser.add_argument("hand_id")
+    gto_match_parser.add_argument("--before-action", type=int, required=True)
+    gto_match_parser.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("solutions/catalog.json"),
+    )
+    gto_match_parser.add_argument(
+        "--objective",
+        choices=[item.value for item in SolutionObjective],
+        default=SolutionObjective.CHIP_EV.value,
+    )
+    gto_match_parser.add_argument("--tournament-context-id")
+    gto_match_parser.add_argument("--rake-model")
+    gto_match_parser.add_argument("--rake-percent", type=Decimal)
+    gto_match_parser.add_argument("--rake-cap-bb", type=Decimal)
+    _add_database_argument(gto_match_parser)
+    gto_match_parser.add_argument("--json", action="store_true")
+
     report_parser = subparsers.add_parser(
         "report", help="Generate the local H2N-lite analysis page"
     )
@@ -199,6 +234,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "sessions": _run_sessions,
         "hands": _run_hands,
         "replay": _run_replay,
+        "gto-match": _run_gto_match,
         "report": _run_report,
     }
     return runners[args.command](args)
@@ -530,6 +566,81 @@ def _run_replay(args: argparse.Namespace) -> int:
         print(json.dumps(_replay_dict(replay), ensure_ascii=False))
     else:
         _print_replay(replay)
+    return 0
+
+
+def _run_gto_match(args: argparse.Namespace) -> int:
+    if not _database_exists(args.database):
+        return 2
+    rake_values = (args.rake_model, args.rake_percent, args.rake_cap_bb)
+    if any(item is not None for item in rake_values) and not all(
+        item is not None for item in rake_values
+    ):
+        return _print_value_error(
+            ValueError(
+                "rake-model, rake-percent, and rake-cap-bb must be supplied together"
+            )
+        )
+    try:
+        catalog = load_solution_catalog(args.catalog)
+        rake = (
+            None
+            if args.rake_model is None
+            else RakeSpec(
+                model_id=args.rake_model,
+                percent=args.rake_percent,
+                cap_bb=args.rake_cap_bb,
+            )
+        )
+        with SQLiteHandStore(args.database) as store:
+            hand = store.load_hand(args.site, args.hand_id)
+        if hand is None:
+            print(
+                f"error: hand not found: {args.site} #{args.hand_id}",
+                file=sys.stderr,
+            )
+            return 2
+        observed = extract_decision_game_spec(
+            hand,
+            before_action=args.before_action,
+            objective=SolutionObjective(args.objective),
+            rake=rake,
+            tournament_context_id=args.tournament_context_id,
+        )
+        result = match_game_spec(observed, catalog)
+    except (OSError, SpecValidationError, ValueError) as exc:
+        return _print_value_error(ValueError(str(exc)))
+
+    payload = {
+        "source": {
+            "site": args.site,
+            "hand_id": args.hand_id,
+            "before_action": args.before_action,
+        },
+        "observed_game_spec": observed.to_dict(),
+        "match": result.to_dict(),
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(
+            f"GTO match: {result.status.value} ({result.reason.value}) · "
+            f"node {observed.fingerprint[:12]}"
+        )
+        if result.solution is not None:
+            print(
+                f"Solution: {result.solution.solution_id} · "
+                f"{result.solution.quality.value} · "
+                f"distance {result.normalized_distance}"
+            )
+        for item in result.differences:
+            print(
+                f"- {item.field}: observed {item.observed}, "
+                f"solution {item.solution}, delta {item.absolute_delta}, "
+                f"threshold {item.threshold}"
+            )
+        if result.status == MatchStatus.UNSUPPORTED:
+            print("No strategy or EV was returned.")
     return 0
 
 

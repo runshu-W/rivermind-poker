@@ -6,6 +6,8 @@ import os
 import sys
 import tempfile
 import time
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -15,6 +17,17 @@ sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 from rivermind_core.importer import HandHistoryImporter  # noqa: E402
 from rivermind_core.coach import explain_leak_report  # noqa: E402
 from rivermind_core.coach_evals import run_coach_eval  # noqa: E402
+from rivermind_core.gto_matcher import (  # noqa: E402
+    MatchStatus,
+    extract_decision_game_spec,
+    match_game_spec,
+)
+from rivermind_core.gto_specs import (  # noqa: E402
+    RakeSpec,
+    SolutionCatalog,
+    SolutionQuality,
+    SolutionSpec,
+)
 from rivermind_core.parsers import default_registry  # noqa: E402
 from rivermind_core.reports import HandQuery, StatMetric  # noqa: E402
 from rivermind_core.storage import SQLiteHandStore  # noqa: E402
@@ -71,6 +84,49 @@ def main() -> int:
                 PROJECT_ROOT / "evals" / "coach_candidate_cases.json"
             )
             coach_eval_elapsed = time.perf_counter() - coach_eval_started
+            benchmark_hand = store.load_hand(
+                "pokerstars", str(100_000_000_000)
+            )
+            assert benchmark_hand is not None
+            benchmark_node = extract_decision_game_spec(
+                benchmark_hand,
+                before_action=5,
+                rake=RakeSpec(
+                    model_id="benchmark-rake",
+                    percent=Decimal("5"),
+                    cap_bb=Decimal("3"),
+                ),
+            )
+            catalog_nodes = 1000
+            synthetic_solutions = tuple(
+                SolutionSpec(
+                    solution_id=f"benchmark-{index}",
+                    game_spec=(
+                        benchmark_node
+                        if index == catalog_nodes - 1
+                        else replace(
+                            benchmark_node,
+                            pot_bb=benchmark_node.pot_bb
+                            + Decimal(index + 1) / Decimal("1000"),
+                        )
+                    ),
+                    solver_name="benchmark",
+                    solver_version="1",
+                    action_tree_version="benchmark/1",
+                    quality=SolutionQuality.TEST_ONLY,
+                    artifact_id=f"benchmark/{index}",
+                    artifact_sha256="b" * 64,
+                )
+                for index in range(catalog_nodes)
+            )
+            catalog = SolutionCatalog(
+                catalog_id="benchmark",
+                catalog_version="1",
+                solutions=synthetic_solutions,
+            )
+            match_started = time.perf_counter()
+            match = match_game_spec(benchmark_node, catalog)
+            match_elapsed = time.perf_counter() - match_started
         if not stats or stats[0].hands != args.hands:
             raise RuntimeError("Stats benchmark did not observe every imported hand")
         if not sessions or sessions[0].hands != args.hands:
@@ -83,6 +139,8 @@ def main() -> int:
             raise RuntimeError("Coach benchmark did not explain every leak card")
         if coach_eval.total != 50 or coach_eval.failed:
             raise RuntimeError("Coach candidate eval gate did not pass all 50 cases")
+        if match.status != MatchStatus.EXACT:
+            raise RuntimeError("GTO matcher benchmark did not find the exact node")
         result = {
             "hands": args.hands,
             "imported": report.imported,
@@ -95,6 +153,8 @@ def main() -> int:
             "leaks_elapsed_seconds": round(leaks_elapsed, 3),
             "coach_templates_elapsed_seconds": round(coach_elapsed, 3),
             "coach_eval_50_elapsed_seconds": round(coach_eval_elapsed, 3),
+            "gto_catalog_nodes": catalog_nodes,
+            "gto_match_elapsed_ms": round(match_elapsed * 1000, 3),
             "database_mb": round(database.stat().st_size / 1024 / 1024, 2),
             "fixture": "synthetic variants of the committed golden hand",
         }

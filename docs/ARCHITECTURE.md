@@ -1,4 +1,4 @@
-# RiverMind 架构 v0.3
+# RiverMind 架构 v0.4
 
 ## 设计原则
 
@@ -24,8 +24,10 @@ flowchart LR
     CRT --> LLM["显式授权的外部模型适配器"]
     LLM --> CVAL["候选忠实性校验"]
     CVAL --> COACH["解释或模板回退"]
-    NORM --> MATCH["GTO 节点匹配（后续）"]
-    MATCH --> EVID
+    NORM --> NODE["决策前 GameSpec"]
+    NODE --> MATCH["GTO Matcher"]
+    CAT["严格版本化 Solution Catalog"] --> MATCH
+    MATCH -->|"仅已验证策略事实；后续"| EVID
 ```
 
 ## 第一阶段模块
@@ -48,7 +50,11 @@ flowchart LR
 | OpenAI Adapter | Responses API、严格 JSON Schema、拒绝/不完整处理 | v0.1 默认关闭；尚未真实调用 |
 | Coach Eval Gate | 候选 schema、证据、数值、隐私和行动攻击面回归 | 50 例全部通过；真实专家质量集待收集 |
 | Expert Review Gate | 盲化解释、双专家评分、不同证据数和 fatal error 门槛 | 工作流已实现；真实评分待收集 |
-| GTO Matcher | 映射到验证解法 | Beta 可选 |
+| GTO Matcher | 真实决策节点提取；精确/阈值近似/不支持；差异说明 | 元数据 v0.1 已实现；策略制品尚未接入 |
+
+## GTO 元数据边界
+
+`GameSpec` 不包含牌谱 ID 或玩家名，指纹由规范化 JSON 计算。`SolutionSpec` 只登记求解器、动作树、质量标签和制品哈希；Matcher 命中不等于策略内容已被加载。现金局缺 rake 结构、ICM/PKO 缺赛事上下文、硬维度不一致、阈值越界或最近候选并列时均失败关闭。完整契约与阈值见 [GTO_MATCHER.md](GTO_MATCHER.md)。
 
 ## 当前存储边界
 

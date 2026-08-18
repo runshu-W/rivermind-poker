@@ -1,6 +1,6 @@
 # RiverMind 德州扑克智能训练产品项目计划书
 
-> 版本：v0.3  
+> 版本：v0.4
 > 日期：2026-08-18  
 > 项目阶段：Phase 0 / Beta 工程启动  
 > 核心原则：专用策略系统负责行动决策；LLM 负责解释、教学表达与受约束的对手画像，不直接决定下注动作。
@@ -722,11 +722,13 @@ H2N-lite 入口将首次可用时间提前到 **8–12 周**；GTO 闭环仍按 
 
 ### 阶段 4：GTO Study/Practice 闭环（第 4–6 个月）
 
+**当前进度：** `GameSpec/SolutionSpec/SolutionCatalog` 元数据契约和牌谱节点精确/阈值近似/不支持匹配 v0.1 已实现；默认目录为空，真实策略制品、EV 与训练界面尚未接入。
+
 **交付：**
 
 - 按真实用户查询量生产 6-max Cash/MTT 高频解法；
-- `GameSpec/SolutionSpec`、解法质量标签和版本注册表；
-- 牌谱节点精确/近似匹配和映射差异；
+- [x] `GameSpec/SolutionSpec`、解法质量标签和严格版本目录 v0.1；
+- [x] 牌谱决策前节点精确/阈值近似/不支持匹配和逐字段映射差异 v0.1；
 - 策略矩阵、范围、EV/EQ 和节点导航；
 - Preflop/Spot/Street/Full Hand 训练；
 - Analyze → Study → Practice → 复测闭环。
