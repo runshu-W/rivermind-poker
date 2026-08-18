@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from rivermind_core.models import (
     Action,
-    ActionType,
     BettingRound,
     GameType,
     HandHistory,
@@ -14,6 +13,17 @@ from rivermind_core.models import (
     enrich_player_context,
 )
 
+from ._common import (
+    CARD_RE,
+    NUMBER,
+    SEAT_RE,
+    SHOW_RE,
+    TABLE_RE,
+    DEALT_RE,
+    decimal_amount,
+    parse_action,
+    split_lines,
+)
 from .base import (
     HandHistoryParseError,
     HandHistoryParser,
@@ -21,7 +31,6 @@ from .base import (
 )
 
 
-NUMBER = r"[\d,]+(?:\.\d+)?"
 CASH_HEADER_RE = re.compile(
     rf"^PokerStars Hand #(?P<hand_id>\d+):\s+"
     rf"(?P<game_name>.*?)\s+\("
@@ -39,42 +48,10 @@ TOURNAMENT_HEADER_RE = re.compile(
     rf"\((?P<small_blind>{NUMBER})/(?P<big_blind>{NUMBER})\)\s+-\s+"
     rf"(?P<played_at>.+)$"
 )
-TABLE_RE = re.compile(
-    r"^Table '(?P<table_name>.+)' (?P<max_seats>\d+)-max "
-    r"Seat #(?P<button_seat>\d+) is the button$"
-)
-SEAT_RE = re.compile(
-    rf"^Seat (?P<seat>\d+): (?P<name>.+) "
-    rf"\([$€£]?(?P<stack>{NUMBER}) in chips\)$"
-)
-DEALT_RE = re.compile(r"^Dealt to (?P<name>.+) \[(?P<cards>[^]]+)]$")
-POST_RE = re.compile(
-    rf"^(?P<name>.+): posts (?P<kind>small blind|big blind|the ante) "
-    rf"[$€£]?(?P<amount>{NUMBER})(?P<all_in> and is all-in)?$"
-)
-SIMPLE_RE = re.compile(r"^(?P<name>.+): (?P<kind>folds|checks)$")
-CHIP_ACTION_RE = re.compile(
-    rf"^(?P<name>.+): (?P<kind>calls|bets) "
-    rf"[$€£]?(?P<amount>{NUMBER})(?P<all_in> and is all-in)?$"
-)
-RAISE_RE = re.compile(
-    rf"^(?P<name>.+): raises [$€£]?(?P<amount>{NUMBER}) to "
-    rf"[$€£]?(?P<to_amount>{NUMBER})(?P<all_in> and is all-in)?$"
-)
-RETURN_RE = re.compile(
-    rf"^Uncalled bet \([$€£]?(?P<amount>{NUMBER})\) returned to (?P<name>.+)$"
-)
-COLLECT_RE = re.compile(
-    rf"^(?P<name>.+) collected [$€£]?(?P<amount>{NUMBER}) "
-    rf"from (?:main |side )?pot(?:-\d+)?$"
-)
 SUMMARY_RE = re.compile(
     rf"^Total pot [$€£]?(?P<total_pot>{NUMBER})(?: .*)? \| "
     rf"Rake [$€£]?(?P<rake>{NUMBER})$"
 )
-SHOW_RE = re.compile(r"^(?P<name>.+): shows \[(?P<cards>[^]]+)](?: .*)?$")
-MUCK_RE = re.compile(r"^(?P<name>.+): (?:mucks hand|doesn't show hand)$")
-CARD_RE = re.compile(r"\b[2-9TJQKA][cdhs]\b")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,13 +73,14 @@ class PokerStarsCashParser(HandHistoryParser):
     """PokerStars English cash-game parser with strict action handling."""
 
     name = "pokerstars_cash_v4"
+    header_prefix = "PokerStars Hand #"
 
     def can_parse(self, raw_text: str) -> bool:
         first_line = raw_text.lstrip().splitlines()[0]
         return first_line.startswith("PokerStars Hand #") and "Tournament #" not in first_line
 
     def parse(self, raw_text: str) -> HandHistory:
-        lines = _lines(raw_text)
+        lines = split_lines(raw_text)
         if "Tournament #" in lines[0]:
             raise UnsupportedHandHistoryError(
                 "Use the PokerStars tournament parser for tournament hands",
@@ -119,8 +97,8 @@ class PokerStarsCashParser(HandHistoryParser):
             game_type=GameType.CASH,
             game_name=match.group("game_name"),
             currency=match.group("currency"),
-            small_blind=_decimal(match.group("small_blind")),
-            big_blind=_decimal(match.group("big_blind")),
+            small_blind=decimal_amount(match.group("small_blind")),
+            big_blind=decimal_amount(match.group("big_blind")),
             played_at=match.group("played_at"),
         )
         return _parse_body(lines, raw_text, header)
@@ -130,13 +108,14 @@ class PokerStarsTournamentParser(HandHistoryParser):
     """PokerStars English paid-entry and freeroll tournament parser."""
 
     name = "pokerstars_tournament_v2"
+    header_prefix = "PokerStars Hand #"
 
     def can_parse(self, raw_text: str) -> bool:
         first_line = raw_text.lstrip().splitlines()[0]
         return first_line.startswith("PokerStars Hand #") and "Tournament #" in first_line
 
     def parse(self, raw_text: str) -> HandHistory:
-        lines = _lines(raw_text)
+        lines = split_lines(raw_text)
         match = TOURNAMENT_HEADER_RE.fullmatch(lines[0])
         if match is None:
             raise HandHistoryParseError(
@@ -149,18 +128,18 @@ class PokerStarsTournamentParser(HandHistoryParser):
             game_type=GameType.TOURNAMENT,
             game_name=match.group("game_name"),
             currency=None if is_freeroll else match.group("currency"),
-            small_blind=_decimal(match.group("small_blind")),
-            big_blind=_decimal(match.group("big_blind")),
+            small_blind=decimal_amount(match.group("small_blind")),
+            big_blind=decimal_amount(match.group("big_blind")),
             played_at=match.group("played_at"),
             tournament_id=match.group("tournament_id"),
             tournament_level=match.group("level"),
-            buy_in=Decimal("0") if is_freeroll else _decimal(match.group("buy_in")),
-            fee=Decimal("0") if is_freeroll else _decimal(match.group("fee")),
+            buy_in=Decimal("0") if is_freeroll else decimal_amount(match.group("buy_in")),
+            fee=Decimal("0") if is_freeroll else decimal_amount(match.group("fee")),
         )
         return _parse_body(lines, raw_text, header)
 
 
-def _lines(raw_text: str) -> list[str]:
+def split_lines(raw_text: str) -> list[str]:
     lines = [line.strip() for line in raw_text.strip().splitlines() if line.strip()]
     if not lines:
         raise HandHistoryParseError("Hand history is empty", code="empty_hand")
@@ -182,7 +161,7 @@ def _parse_body(lines: list[str], raw_text: str, header: _Header) -> HandHistory
         Player(
             seat=int(match.group("seat")),
             name=match.group("name"),
-            starting_stack=_decimal(match.group("stack")),
+            starting_stack=decimal_amount(match.group("stack")),
         )
         for line in lines
         if (match := SEAT_RE.fullmatch(line)) is not None
@@ -249,8 +228,8 @@ def _parse_body(lines: list[str], raw_text: str, header: _Header) -> HandHistory
 
         summary = SUMMARY_RE.fullmatch(line)
         if summary:
-            total_pot = _decimal(summary.group("total_pot"))
-            rake = _decimal(summary.group("rake"))
+            total_pot = decimal_amount(summary.group("total_pot"))
+            rake = decimal_amount(summary.group("rake"))
             continue
         if line.startswith("Total pot "):
             raise HandHistoryParseError(
@@ -260,7 +239,7 @@ def _parse_body(lines: list[str], raw_text: str, header: _Header) -> HandHistory
         if in_summary:
             continue
 
-        parsed_action = _parse_action(line, street, len(actions))
+        parsed_action = parse_action(line, street, len(actions))
         if parsed_action is not None:
             actions.append(parsed_action)
             continue
@@ -303,118 +282,3 @@ def _parse_body(lines: list[str], raw_text: str, header: _Header) -> HandHistory
         fee=header.fee,
         raw_text=raw_text,
     )
-
-
-def _parse_action(
-    line: str, street: BettingRound, sequence: int
-) -> Action | None:
-    post = POST_RE.fullmatch(line)
-    if post:
-        post_types = {
-            "small blind": ActionType.POST_SMALL_BLIND,
-            "big blind": ActionType.POST_BIG_BLIND,
-            "the ante": ActionType.POST_ANTE,
-        }
-        return Action(
-            sequence=sequence,
-            street=street,
-            player=post.group("name"),
-            action_type=post_types[post.group("kind")],
-            amount=_decimal(post.group("amount")),
-            is_all_in=post.group("all_in") is not None,
-            raw_text=line,
-        )
-
-    simple = SIMPLE_RE.fullmatch(line)
-    if simple:
-        return Action(
-            sequence=sequence,
-            street=street,
-            player=simple.group("name"),
-            action_type=(
-                ActionType.FOLD if simple.group("kind") == "folds" else ActionType.CHECK
-            ),
-            raw_text=line,
-        )
-
-    chip_action = CHIP_ACTION_RE.fullmatch(line)
-    if chip_action:
-        return Action(
-            sequence=sequence,
-            street=street,
-            player=chip_action.group("name"),
-            action_type=(
-                ActionType.CALL
-                if chip_action.group("kind") == "calls"
-                else ActionType.BET
-            ),
-            amount=_decimal(chip_action.group("amount")),
-            is_all_in=chip_action.group("all_in") is not None,
-            raw_text=line,
-        )
-
-    raised = RAISE_RE.fullmatch(line)
-    if raised:
-        return Action(
-            sequence=sequence,
-            street=street,
-            player=raised.group("name"),
-            action_type=ActionType.RAISE,
-            amount=_decimal(raised.group("amount")),
-            to_amount=_decimal(raised.group("to_amount")),
-            is_all_in=raised.group("all_in") is not None,
-            raw_text=line,
-        )
-
-    returned = RETURN_RE.fullmatch(line)
-    if returned:
-        return Action(
-            sequence=sequence,
-            street=street,
-            player=returned.group("name"),
-            action_type=ActionType.RETURN,
-            amount=_decimal(returned.group("amount")),
-            raw_text=line,
-        )
-
-    collected = COLLECT_RE.fullmatch(line)
-    if collected:
-        return Action(
-            sequence=sequence,
-            street=street,
-            player=collected.group("name"),
-            action_type=ActionType.COLLECT,
-            amount=_decimal(collected.group("amount")),
-            raw_text=line,
-        )
-
-    shown = SHOW_RE.fullmatch(line)
-    if shown:
-        return Action(
-            sequence=sequence,
-            street=BettingRound.SHOWDOWN,
-            player=shown.group("name"),
-            action_type=ActionType.SHOW,
-            raw_text=line,
-        )
-
-    mucked = MUCK_RE.fullmatch(line)
-    if mucked:
-        return Action(
-            sequence=sequence,
-            street=BettingRound.SHOWDOWN,
-            player=mucked.group("name"),
-            action_type=ActionType.MUCK,
-            raw_text=line,
-        )
-
-    return None
-
-
-def _decimal(value: str | None) -> Decimal:
-    if value is None:
-        raise HandHistoryParseError("Missing numeric value", code="missing_number")
-    try:
-        return Decimal(value.replace(",", ""))
-    except InvalidOperation as exc:
-        raise HandHistoryParseError(f"Invalid numeric value: {value}") from exc

@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, Sequence
 from uuid import uuid4
 
 from rivermind_core.models import HandHistory, HandValidationError
@@ -16,7 +16,10 @@ from rivermind_core.parsers import (
 )
 
 
-HAND_START_RE = re.compile(r"^PokerStars Hand #", re.MULTILINE)
+#: Fallback boundaries for callers that use ``split_hand_histories`` on its own.
+#: ``HandHistoryImporter`` asks its registry instead, so registering a parser is
+#: all it takes to make that site's multi-hand files splittable.
+DEFAULT_HAND_START_PREFIXES = ("PokerStars Hand #", "Poker Hand #")
 
 
 class ImportItemStatus(StrEnum):
@@ -114,10 +117,14 @@ class ImportStore(Protocol):
     def abort_batch(self, batch_id: str) -> None: ...
 
 
-def split_hand_histories(raw_text: str) -> tuple[HandSegment, ...]:
+def split_hand_histories(
+    raw_text: str,
+    *,
+    prefixes: Sequence[str] = DEFAULT_HAND_START_PREFIXES,
+) -> tuple[HandSegment, ...]:
     """Split a file into hands while preserving source line ranges.
 
-    PokerStars hand headers are unambiguous boundaries. If no known boundary
+    A site's hand header is an unambiguous boundary. If no known boundary
     exists, the entire non-empty input becomes one unsupported candidate so the
     caller receives a visible error instead of silently dropping the file.
     """
@@ -132,7 +139,7 @@ def split_hand_histories(raw_text: str) -> tuple[HandSegment, ...]:
     start_indexes = [
         index
         for index, line in enumerate(lines)
-        if HAND_START_RE.match(line.lstrip("\ufeff"))
+        if any(line.lstrip("\ufeff").startswith(prefix) for prefix in prefixes)
     ]
     if not start_indexes:
         text = "\n".join(lines).strip()
@@ -184,7 +191,9 @@ class HandHistoryImporter:
         self._store.begin_batch(batch_id, source_name, started_at)
         results: list[ImportItemResult] = []
         try:
-            for segment in split_hand_histories(raw_text):
+            for segment in split_hand_histories(
+                raw_text, prefixes=self._registry.header_prefixes()
+            ):
                 result = self._import_segment(source_name, segment)
                 self._store.record_item(batch_id, result, segment.raw_text)
                 results.append(result)

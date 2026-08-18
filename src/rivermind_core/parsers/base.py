@@ -24,6 +24,11 @@ class UnsupportedHandHistoryError(HandHistoryParseError):
 class HandHistoryParser(ABC):
     name: str
 
+    #: The literal text every hand from this site starts with.  The importer
+    #: uses it to find hand boundaries, so a new parser makes multi-hand files
+    #: from its site splittable without touching the importer.
+    header_prefix: str = ""
+
     @abstractmethod
     def can_parse(self, raw_text: str) -> bool:
         """Return whether this parser recognizes the supplied text."""
@@ -39,6 +44,21 @@ class ParserRegistry:
 
     def register(self, parser: HandHistoryParser) -> None:
         self._parsers.append(parser)
+
+    def header_prefixes(self) -> tuple[str, ...]:
+        """Every registered site's hand-boundary marker, longest first.
+
+        Longest first matters: ``PokerStars Hand #`` must be tried before a
+        shorter prefix that happens to be a substring of it.
+        """
+
+        return tuple(
+            sorted(
+                {parser.header_prefix for parser in self._parsers if parser.header_prefix},
+                key=len,
+                reverse=True,
+            )
+        )
 
     def parse(self, raw_text: str) -> HandHistory:
         _, hand = self.parse_with_parser(raw_text)

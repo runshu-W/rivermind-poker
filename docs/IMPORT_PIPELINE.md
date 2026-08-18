@@ -48,7 +48,11 @@ python -m rivermind_core import tests/fixtures --database data/rivermind.db --js
 
 2026-08-18 在当前开发环境运行合成 10,000 手基准：导入并同步物化统计与结果表用时 3.795 秒，约 2,635 手/秒；统计聚合 0.182 秒，约 54,836 手/秒；Session 聚合 0.096 秒；筛选最近 1,000 手 CBet 牌谱 0.067 秒；包含证据查询的漏洞评估 0.221 秒；确定性教练模板生成不足 0.001 秒；50 例教练候选评测门用时 0.009 秒；SQLite 文件约 56.78 MB。输入是已提交黄金牌谱的不同手牌 ID 变体，只用于发现性能回退，不代表真实牌谱覆盖率。
 
-当前支持 PokerStars 英文现金桌，以及带常规买入或 Freeroll 标识的基础 MTT 格式。第二个平台、更多经过授权的真实匿名黄金牌谱、100k/1M 批量基准和统计分析物理模型是后续工作。`tests/fixtures/manifest.json` 明确记录样本来源，当前样本均为合成代表性牌谱，不冒充真实用户数据。运行基准：
+当前支持 PokerStars 英文现金桌与基础 MTT（常规买入或 Freeroll），以及 GGPoker 现金桌（见 [GGPOKER_PARSER.md](GGPOKER_PARSER.md)，尚未经真实导出验证）。
+
+手牌边界不再写死单一站点：每个解析器用 `header_prefix` 声明自己的手牌头，`ParserRegistry.header_prefixes()` 汇总后交给切分器（长前缀优先）。注册一个新解析器就够了，不用改导入器。
+
+GGPoker 锦标赛、更多经过授权的真实匿名黄金牌谱、100k/1M 批量基准和统计分析物理模型是后续工作。`tests/fixtures/manifest.json` 明确记录样本来源，当前样本均为合成代表性牌谱，不冒充真实用户数据。运行基准：
 
 ```powershell
 python benchmarks/import_benchmark.py --hands 10000

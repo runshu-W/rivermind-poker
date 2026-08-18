@@ -42,6 +42,8 @@ flowchart LR
 | Canonical Model | 玩家、筹码、行动、街道、牌面、现金/赛事元数据与结算 | 已建立 v0.3 |
 | Parser Registry | 识别来源并路由到站点解析器 | 已建立 v0.1 |
 | PokerStars Parser | 英文现金桌、付费 MTT、Freeroll 文本解析 | Cash v4 / MTT v2 |
+| GGPoker Parser | 现金桌解析；跑两次/Cashout/Cash Drop/非德州显式拒绝 | v1 已实现；**未经真实导出验证** |
+| Shared Line Grammar | 座位、盲注、行动、返还、摊牌语法的唯一定义 | `parsers/_common.py` |
 | Import Pipeline | 文件扫描、拆手、去重、失败隔离 | v0.1 已实现 |
 | Import Store | 导入审计、规范化 JSON、原文回放 | SQLite v0.1 已实现 |
 | Analytics Store | 玩家–手牌统计宽表与维度索引 | SQLite v0.2，列式方案待百万手基准 |

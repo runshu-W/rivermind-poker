@@ -1,0 +1,77 @@
+name: ci
+
+# The repository has no runtime dependencies, so CI installs nothing. Every job
+# below runs against a bare interpreter, which is also how a user runs it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is not optional here: strategy artifacts are addressed by the
+        # SHA-256 of their exact bytes, and a Windows checkout is where a stray
+        # line-ending rewrite would break them.
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run unit tests
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
+      - name: Byte-compile every source tree
+        run: python -m compileall -q src benchmarks tests
+
+  benchmark:
+    name: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # A small run: this proves the benchmark still executes and that its
+      # internal assertions hold. It is not a performance gate — shared runners
+      # are too noisy for that.
+      - name: Run the repeatable benchmark
+        env:
+          PYTHONPATH: src
+        run: python benchmarks/import_benchmark.py --hands 2000
+
+  guards:
+    name: repository guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: No verified strategy, grants or reports may be committed
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_quality_gate.RepositoryQualityGuardTest -v
+      - name: Committed artifacts must match their recorded hashes
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_strategy_artifacts.StrategyQueryTest -v
+      - name: No databases, hand histories or secrets in the tree
+        run: python tools/check_repository.py
+      - name: Documentation links must resolve
+        run: python tools/check_docs.py

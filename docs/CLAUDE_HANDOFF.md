@@ -1,7 +1,7 @@
 # RiverMind Poker — Claude 工程交接文稿
 
 > 交接日期：2026-08-18
-> 最近更新：2026-08-18（Strategy Artifact、Solve Quality Gate、TexasSolver 接入、Catalog 索引、CI、Board Isomorphism 完成）
+> 最近更新：2026-08-18（Strategy Artifact、Solve Quality Gate、TexasSolver 接入、Catalog 索引、CI、Board Isomorphism、GGPoker 解析器完成）
 > GitHub：https://github.com/runshu-W/rivermind-poker
 > 默认分支：`main`
 > 功能基线：`5919e00 feat: add verifiable strategy artifacts and an independent quality gate` 之后的 TexasSolver 接入
@@ -21,7 +21,7 @@ python benchmarks/import_benchmark.py --hands 10000
 
 交接时的预期基线：
 
-- 276 项自动化测试全部通过（Python 3.11 / 3.12 / 3.13 均已验证）；
+- 296 项自动化测试全部通过（Python 3.11 / 3.12 / 3.13 均已验证）；
 - 10,000 手牌导入约 3.8 秒，机器差异允许结果浮动；
 - 1,000 个解法元数据：无索引单次匹配约 20–30 ms，预建索引后约 0.03 ms；
 - 单个 test_only 策略制品验证约 0.3 ms，单组合查询约 0.01 ms，完整质量门约 0.5 ms；
@@ -70,7 +70,7 @@ RiverMind 的定位是：
 现状：
 
 - 规范化 `HandHistory`、玩家、位置、行动、街道、公共牌和结算字段；
-- 支持 PokerStars 英文现金桌与 MTT 文本；
+- 支持 PokerStars 英文现金桌与 MTT 文本，以及 GGPoker 现金桌（见 3.13）；
 - MTT 支持付费赛、Freeroll、ante 和赛事级别；
 - 行动序号连续，金额使用 `Decimal`；
 - 支持 2–10 人位置规范化，GTO `GameSpec` 当前明确限制为 2–9 人；
@@ -401,6 +401,28 @@ loader 会拒绝：哈希不符、`solution_id`/`GameSpec` 指纹/动作树/求�
 
 建 CI 时立刻抓到一个真问题：`test_rejects_json_nested_too_deeply` 在 3.12/3.13 上失败——CPython 3.12 提高了 json 的嵌套上限，3000 层不再抛 `RecursionError`。行为本身仍然失败关闭（文档被当成非对象拒绝），是测试写死了错误文案。已改成用 50,000 层（三个版本都稳定触发）并补一条浅层用例。
 
+### 3.13 GGPoker 解析器 v0.1
+
+主要文件：
+
+- `src/rivermind_core/parsers/_common.py`（两个站点共用的行语法）
+- `src/rivermind_core/parsers/ggpoker.py`
+- `docs/GGPOKER_PARSER.md`
+- `tests/test_ggpoker_parser.py`
+
+**这个解析器还没有被真实导出验证过。** 它是照 GGPoker 公开的行格式和追踪软件支持论坛里贴出的真实片段写的，fixture 是据此重建的。上线前必须拿一份真实 PokerCraft 导出跑一遍。
+
+GG 几乎照抄了 PokerStars 的行格式，所以座位/盲注/行动/返还/摊牌语法已抽到 `_common.py` 逐字共用——一份定义，两个站点不会漂移。真正不同的是：手牌 ID 带字母前缀（`RC`/`HD`/`OM`/`TM`）、盲注不补零且无货币代码、`*** SHOWDOWN ***` 没有空格、摘要行多出 Jackpot/Bingo 列、对手名匿名。
+
+**显式拒绝而不是勉强解析**：跑两次/三次、EV Cashout、Cash Drop、赏金、非德州、锦标赛，各有独立拒绝码，逐手隔离。
+
+**两个在实现过程中发现的真问题：**
+
+1. **切分器写死了 `PokerStars Hand #`。** GGPoker 的多手文件会被当成一整块，整份文件失败。现在每个解析器用 `header_prefix` 声明自己的手牌头，`ParserRegistry.header_prefixes()` 汇总交给切分器。注册新解析器就够了。
+2. **`hand.rake` 低估了房间的抽成。** GG 在 Rake 之外还扣 Jackpot 和 Bingo，而模型只有一个 `rake` 字段。fixture 那手里 `rake=0.15`，玩家净额之和却是 `-0.20`。筹码账本本身没错（净额来自实际投入/返还/收池），错的是「拿 `hand.rake` 当现金局成本」这个用法。**对 GTO 层的 `RakeSpec` 尤其要紧**：接入 GG 数据时必须单独考虑 jackpot drop，否则 EV 偏高。已有测试把这条钉住。
+
+匿名对手的后果：Hero 统计正常，但对手统计无法跨手聚合（Rush & Cash 每手换 ID），未来的对手建模在 GG 数据上不可用。
+
 ## 4. 当前 CLI
 
 入口：
@@ -548,7 +570,7 @@ python benchmarks/import_benchmark.py --hands 10000
 
 ### H2N-lite 层
 
-- 只有 PokerStars 英文牌谱；
+- GGPoker 解析器未经真实导出验证；GG 锦标赛、跑两次和 jackpot 建模均未支持；
 - fixture 覆盖仍小；
 - 缺 All-in EV 和大量常见 H2N 报告；
 - 百万手性能与迁移策略未验证；
@@ -754,7 +776,7 @@ gto-query --attestation  首次 usable_for_teaching = true
 ```text
 请先阅读 README.md、docs/CLAUDE_HANDOFF.md、docs/ARCHITECTURE.md、
 docs/GTO_MATCHER.md、docs/STRATEGY_ARTIFACTS.md 和 docs/SOLVE_QUALITY_GATE.md，
-并运行当前 276 项测试和 10,000 手牌基准。
+并运行当前 296 项测试和 10,000 手牌基准。
 
 保持产品定位不变：H2N-lite 是入口，GTO + AI 教练是长期差异化；
 专用策略系统负责扑克策略，LLM 不得生成或补齐行动频率和 EV。

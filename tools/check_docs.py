@@ -32,6 +32,7 @@ REQUIRED_DOCS = (
     "docs/SOLVE_QUALITY_GATE.md",
     "docs/SOLVER_INGEST_TEXASSOLVER.md",
     "docs/BOARD_ISOMORPHISM.md",
+    "docs/GGPOKER_PARSER.md",
 )
 
 
