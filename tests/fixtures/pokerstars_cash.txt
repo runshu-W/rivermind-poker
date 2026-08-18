@@ -1,0 +1,26 @@
+PokerStars Hand #100000000001: Hold'em No Limit ($0.05/$0.10 USD) - 2026/08/18 12:00:00 ET
+Table 'RiverMind Alpha' 6-max Seat #3 is the button
+Seat 1: Villain ($10.00 in chips)
+Seat 3: Hero ($10.00 in chips)
+Hero: posts small blind $0.05
+Villain: posts big blind $0.10
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kd]
+Hero: raises $0.20 to $0.30
+Villain: calls $0.20
+*** FLOP *** [2c 7d Ts]
+Villain: checks
+Hero: bets $0.33
+Villain: calls $0.33
+*** TURN *** [2c 7d Ts] [As]
+Villain: checks
+Hero: bets $0.75
+Villain: folds
+Uncalled bet ($0.75) returned to Hero
+Hero collected $1.29 from pot
+*** SUMMARY ***
+Total pot $1.32 | Rake $0.03
+Board [2c 7d Ts As]
+Seat 1: Villain folded on the Turn
+Seat 3: Hero (button) (small blind) collected ($1.29)
+
