@@ -73,7 +73,7 @@ class PokerStarsTournamentParserTest(unittest.TestCase):
         self.assertEqual([action.to_amount for action in raises], [Decimal("100"), Decimal("300")])
         self.assertEqual(hand.board, ("2c", "7d", "Ts", "As", "4h"))
         self.assertEqual(villain.hole_cards, ("Qs", "Qh"))
-        self.assertEqual(hand.total_pot, Decimal("1080"))
+        self.assertEqual(hand.total_pot, Decimal("1105"))
         self.assertEqual(hand.rake, Decimal("0"))
 
     def test_supports_freeroll_header_without_claiming_currency(self) -> None:

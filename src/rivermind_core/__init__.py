@@ -1,5 +1,14 @@
 """RiverMind's normalized poker hand-history core."""
 
+from .accounting import (
+    ActionLedgerEntry,
+    HandAccountingError,
+    HandLedger,
+    PlayerHandResult,
+    calculate_hand_ledger,
+    calculate_action_ledger,
+)
+
 from .models import (
     Action,
     ActionType,
@@ -19,6 +28,25 @@ from .importer import (
     split_hand_histories,
 )
 from .storage import SQLiteHandStore
+from .sessions import (
+    PlayerHandOutcome,
+    SessionSummary,
+    build_player_hand_outcomes,
+    parse_played_at,
+    summarize_sessions,
+)
+from .replay import (
+    HandReplay,
+    ReplayFrame,
+    ReplayPlayer,
+    build_hand_replay,
+)
+from .reports import (
+    HandQuery,
+    PlayerHandReport,
+    StatMetric,
+)
+from .html_report import render_analysis_page
 from .stats import (
     PlayerHandStatRow,
     PlayerStats,
@@ -31,10 +59,15 @@ from .stats import (
 
 __all__ = [
     "Action",
+    "ActionLedgerEntry",
     "ActionType",
     "BettingRound",
     "GameType",
     "HandHistory",
+    "HandAccountingError",
+    "HandLedger",
+    "HandReplay",
+    "HandQuery",
     "HandHistoryImporter",
     "HandValidationError",
     "ImportBatchReport",
@@ -43,13 +76,27 @@ __all__ = [
     "Player",
     "PlayerPosition",
     "PlayerHandStatRow",
+    "PlayerHandResult",
+    "PlayerHandReport",
+    "PlayerHandOutcome",
     "PlayerStats",
+    "ReplayFrame",
+    "ReplayPlayer",
     "SQLiteHandStore",
+    "SessionSummary",
     "StatValue",
     "StatsFilter",
+    "StatMetric",
     "aggregate_player_stat_rows",
     "build_player_hand_stat_rows",
+    "build_player_hand_outcomes",
+    "build_hand_replay",
     "calculate_player_stats",
+    "calculate_action_ledger",
+    "calculate_hand_ledger",
     "enrich_player_context",
+    "parse_played_at",
+    "render_analysis_page",
+    "summarize_sessions",
     "split_hand_histories",
 ]

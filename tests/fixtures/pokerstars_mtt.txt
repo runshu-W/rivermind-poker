@@ -36,9 +36,9 @@ Villain: checks
 *** SHOW DOWN ***
 Hero: shows [Ah Kd] (a pair of Aces)
 Villain: shows [Qs Qh] (a pair of Queens)
-Hero collected 1080 from pot
+Hero collected 1105 from pot
 *** SUMMARY ***
-Total pot 1080 | Rake 0
+Total pot 1105 | Rake 0
 Board [2c 7d Ts As 4h]
-Seat 3: Hero showed [Ah Kd] and won (1080) with a pair of Aces
+Seat 3: Hero showed [Ah Kd] and won (1105) with a pair of Aces
 Seat 4: Villain showed [Qs Qh] and lost with a pair of Queens

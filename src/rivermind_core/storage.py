@@ -2,17 +2,30 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from rivermind_core.accounting import HandLedger, calculate_hand_ledger
 from rivermind_core.importer import (
     ImportBatchReport,
     ImportItemResult,
     ImportItemStatus,
 )
 from rivermind_core.models import GameType, HandHistory, PlayerPosition
+from rivermind_core.replay import HandReplay, build_hand_replay
+from rivermind_core.reports import (
+    HandQuery,
+    METRICS_WITH_OPPORTUNITIES,
+    PlayerHandReport,
+)
 from rivermind_core.serialization import hand_from_json, hand_to_json
+from rivermind_core.sessions import (
+    PlayerHandOutcome,
+    SessionSummary,
+    parse_played_at,
+    summarize_sessions,
+)
 from rivermind_core.stats import (
     PlayerHandStatRow,
     PlayerStats,
@@ -103,6 +116,26 @@ CREATE INDEX IF NOT EXISTS idx_player_stats_player ON player_hand_stats(player_n
 CREATE INDEX IF NOT EXISTS idx_player_stats_hero ON player_hand_stats(is_hero);
 CREATE INDEX IF NOT EXISTS idx_player_stats_dimensions
     ON player_hand_stats(game_type, position, effective_stack_bb);
+
+CREATE TABLE IF NOT EXISTS player_hand_results (
+    hand_row_id INTEGER NOT NULL REFERENCES hands(row_id) ON DELETE CASCADE,
+    player_name TEXT NOT NULL,
+    played_at TEXT,
+    currency TEXT,
+    table_name TEXT NOT NULL,
+    invested TEXT NOT NULL,
+    returned TEXT NOT NULL,
+    collected TEXT NOT NULL,
+    net_result TEXT NOT NULL,
+    net_result_bb TEXT NOT NULL,
+    accounting_balanced INTEGER NOT NULL,
+    PRIMARY KEY(hand_row_id, player_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_results_player_time
+    ON player_hand_results(player_name, played_at);
+CREATE INDEX IF NOT EXISTS idx_player_results_time
+    ON player_hand_results(played_at);
 """
 
 
@@ -118,16 +151,18 @@ class SQLiteHandStore:
         previous_version = int(
             self._connection.execute("PRAGMA user_version").fetchone()[0]
         )
-        if previous_version > 2:
+        if previous_version > 3:
             self._connection.close()
             raise RuntimeError(
-                f"Database schema v{previous_version} is newer than supported v2"
+                f"Database schema v{previous_version} is newer than supported v3"
             )
         self._connection.executescript(SCHEMA)
         self._active_batch: str | None = None
         if previous_version < 2:
             self._backfill_player_hand_stats()
-            self._connection.execute("PRAGMA user_version = 2")
+        if previous_version < 3:
+            self._backfill_player_hand_results()
+            self._connection.execute("PRAGMA user_version = 3")
 
     def close(self) -> None:
         self._connection.close()
@@ -184,6 +219,9 @@ class SQLiteHandStore:
         if imported:
             self._insert_player_hand_stats(
                 int(cursor.lastrowid), build_player_hand_stat_rows(hand)
+            )
+            self._insert_player_hand_results(
+                int(cursor.lastrowid), hand, calculate_hand_ledger(hand)
             )
         return imported
 
@@ -294,28 +332,11 @@ class SQLiteHandStore:
             raise ValueError("player_name and heroes_only cannot be combined")
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
-        active_filter = stat_filter or StatsFilter()
-        conditions: list[str] = []
-        parameters: list[object] = []
-        if player_name is not None:
-            conditions.append("s.player_name = ?")
-            parameters.append(player_name)
-        if heroes_only:
-            conditions.append("s.is_hero = 1")
-        if active_filter.game_types:
-            values = sorted(item.value for item in active_filter.game_types)
-            conditions.append(f"s.game_type IN ({','.join('?' for _ in values)})")
-            parameters.extend(values)
-        if active_filter.positions:
-            values = sorted(item.value for item in active_filter.positions)
-            conditions.append(f"s.position IN ({','.join('?' for _ in values)})")
-            parameters.extend(values)
-        if active_filter.min_effective_stack_bb is not None:
-            conditions.append("s.effective_stack_bb >= ?")
-            parameters.append(float(active_filter.min_effective_stack_bb))
-        if active_filter.max_effective_stack_bb is not None:
-            conditions.append("s.effective_stack_bb <= ?")
-            parameters.append(float(active_filter.max_effective_stack_bb))
+        conditions, parameters = self._stat_conditions(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=stat_filter or StatsFilter(),
+        )
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         cursor = self._connection.execute(
             f"""
@@ -330,6 +351,107 @@ class SQLiteHandStore:
         while rows := cursor.fetchmany(batch_size):
             for row in rows:
                 yield self._stat_row_from_sqlite(row)
+
+    def query_hands(
+        self,
+        *,
+        player_name: str | None = None,
+        heroes_only: bool = False,
+        query: HandQuery | None = None,
+    ) -> tuple[PlayerHandReport, ...]:
+        active_query = query or HandQuery()
+        conditions, parameters = self._stat_conditions(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=active_query.stat_filter,
+        )
+        if active_query.started_at is not None:
+            conditions.append("r.played_at >= ?")
+            parameters.append(active_query.started_at.isoformat())
+        if active_query.ended_at is not None:
+            conditions.append("r.played_at <= ?")
+            parameters.append(active_query.ended_at.isoformat())
+        if active_query.metric is not None:
+            metric_column = active_query.metric.value
+            if active_query.metric in METRICS_WITH_OPPORTUNITIES:
+                conditions.append(f"s.{metric_column}_opportunity = 1")
+            if active_query.occurred is not None:
+                conditions.append(f"s.{metric_column} = ?")
+                parameters.append(int(active_query.occurred))
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        parameters.extend([active_query.limit, active_query.offset])
+        rows = self._connection.execute(
+            f"""
+            SELECT h.site, h.hand_id, s.*, r.played_at, r.currency,
+                   r.table_name, r.invested, r.returned, r.collected,
+                   r.net_result, r.net_result_bb, r.accounting_balanced
+            FROM player_hand_stats AS s
+            JOIN hands AS h ON h.row_id = s.hand_row_id
+            JOIN player_hand_results AS r
+              ON r.hand_row_id = s.hand_row_id
+             AND r.player_name = s.player_name
+            {where_clause}
+            ORDER BY r.played_at IS NULL, r.played_at DESC, h.row_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            parameters,
+        ).fetchall()
+        return tuple(self._report_from_sqlite(row) for row in rows)
+
+    def query_sessions(
+        self,
+        *,
+        player_name: str | None = None,
+        heroes_only: bool = False,
+        stat_filter: StatsFilter | None = None,
+        cash_gap: timedelta = timedelta(minutes=30),
+    ) -> tuple[SessionSummary, ...]:
+        conditions, parameters = self._stat_conditions(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=stat_filter or StatsFilter(),
+        )
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = self._connection.execute(
+            f"""
+            SELECT h.site, h.hand_id, s.player_name, s.game_type,
+                   s.tournament_id, r.currency, r.table_name, r.played_at,
+                   r.net_result, r.net_result_bb, r.accounting_balanced
+            FROM player_hand_stats AS s
+            JOIN hands AS h ON h.row_id = s.hand_row_id
+            JOIN player_hand_results AS r
+              ON r.hand_row_id = s.hand_row_id
+             AND r.player_name = s.player_name
+            {where_clause}
+            ORDER BY r.played_at, h.row_id
+            """,
+            parameters,
+        ).fetchall()
+        outcomes = tuple(
+            PlayerHandOutcome(
+                site=row["site"],
+                hand_id=row["hand_id"],
+                player_name=row["player_name"],
+                game_type=GameType(row["game_type"]),
+                currency=row["currency"],
+                tournament_id=row["tournament_id"],
+                table_name=row["table_name"],
+                played_at=(
+                    None
+                    if row["played_at"] is None
+                    else datetime.fromisoformat(row["played_at"])
+                ),
+                net_result=Decimal(row["net_result"]),
+                net_result_bb=Decimal(row["net_result_bb"]),
+                accounting_balanced=bool(row["accounting_balanced"]),
+            )
+            for row in rows
+        )
+        return summarize_sessions(outcomes, cash_gap=cash_gap)
+
+    def load_replay(self, site: str, hand_id: str) -> HandReplay | None:
+        hand = self.load_hand(site, hand_id)
+        return None if hand is None else build_hand_replay(hand)
 
     def get_batch_report(self, batch_id: str) -> ImportBatchReport | None:
         batch = self._connection.execute(
@@ -389,6 +511,45 @@ class SQLiteHandStore:
         assert row is not None
         return int(row["count"])
 
+    def result_row_count(self) -> int:
+        row = self._connection.execute(
+            "SELECT COUNT(*) AS count FROM player_hand_results"
+        ).fetchone()
+        assert row is not None
+        return int(row["count"])
+
+    @staticmethod
+    def _stat_conditions(
+        *,
+        player_name: str | None,
+        heroes_only: bool,
+        stat_filter: StatsFilter,
+    ) -> tuple[list[str], list[object]]:
+        if player_name is not None and heroes_only:
+            raise ValueError("player_name and heroes_only cannot be combined")
+        conditions: list[str] = []
+        parameters: list[object] = []
+        if player_name is not None:
+            conditions.append("s.player_name = ?")
+            parameters.append(player_name)
+        if heroes_only:
+            conditions.append("s.is_hero = 1")
+        if stat_filter.game_types:
+            values = sorted(item.value for item in stat_filter.game_types)
+            conditions.append(f"s.game_type IN ({','.join('?' for _ in values)})")
+            parameters.extend(values)
+        if stat_filter.positions:
+            values = sorted(item.value for item in stat_filter.positions)
+            conditions.append(f"s.position IN ({','.join('?' for _ in values)})")
+            parameters.extend(values)
+        if stat_filter.min_effective_stack_bb is not None:
+            conditions.append("s.effective_stack_bb >= ?")
+            parameters.append(float(stat_filter.min_effective_stack_bb))
+        if stat_filter.max_effective_stack_bb is not None:
+            conditions.append("s.effective_stack_bb <= ?")
+            parameters.append(float(stat_filter.max_effective_stack_bb))
+        return conditions, parameters
+
     def _backfill_player_hand_stats(self) -> None:
         cursor = self._connection.execute(
             """
@@ -407,6 +568,26 @@ class SQLiteHandStore:
                     hand = hand_from_json(row["payload_json"])
                     self._insert_player_hand_stats(
                         int(row["row_id"]), build_player_hand_stat_rows(hand)
+                    )
+
+    def _backfill_player_hand_results(self) -> None:
+        cursor = self._connection.execute(
+            """
+            SELECT h.row_id, h.payload_json
+            FROM hands AS h
+            WHERE NOT EXISTS (
+                SELECT 1 FROM player_hand_results AS r
+                WHERE r.hand_row_id = h.row_id
+            )
+            ORDER BY h.row_id
+            """
+        )
+        with self._connection:
+            while rows := cursor.fetchmany(1000):
+                for row in rows:
+                    hand = hand_from_json(row["payload_json"])
+                    self._insert_player_hand_results(
+                        int(row["row_id"]), hand, calculate_hand_ledger(hand)
                     )
 
     def _insert_player_hand_stats(
@@ -460,6 +641,36 @@ class SQLiteHandStore:
             ],
         )
 
+    def _insert_player_hand_results(
+        self, hand_row_id: int, hand: HandHistory, ledger: HandLedger
+    ) -> None:
+        played_at = parse_played_at(hand.played_at_raw)
+        self._connection.executemany(
+            """
+            INSERT OR IGNORE INTO player_hand_results(
+                hand_row_id, player_name, played_at, currency, table_name,
+                invested, returned, collected, net_result, net_result_bb,
+                accounting_balanced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    hand_row_id,
+                    result.player_name,
+                    None if played_at is None else played_at.isoformat(),
+                    hand.currency,
+                    hand.table_name,
+                    str(result.invested),
+                    str(result.returned),
+                    str(result.collected),
+                    str(result.net_result),
+                    str(result.net_result_bb),
+                    int(ledger.is_balanced),
+                )
+                for result in ledger.results
+            ],
+        )
+
     @staticmethod
     def _stat_row_from_sqlite(row: sqlite3.Row) -> PlayerHandStatRow:
         return PlayerHandStatRow(
@@ -492,4 +703,23 @@ class SQLiteHandStore:
                 row["fold_to_flop_cbet_opportunity"]
             ),
             fold_to_flop_cbet=bool(row["fold_to_flop_cbet"]),
+        )
+
+    @classmethod
+    def _report_from_sqlite(cls, row: sqlite3.Row) -> PlayerHandReport:
+        return PlayerHandReport(
+            stats=cls._stat_row_from_sqlite(row),
+            played_at=(
+                None
+                if row["played_at"] is None
+                else datetime.fromisoformat(row["played_at"])
+            ),
+            currency=row["currency"],
+            table_name=row["table_name"],
+            invested=Decimal(row["invested"]),
+            returned=Decimal(row["returned"]),
+            collected=Decimal(row["collected"]),
+            net_result=Decimal(row["net_result"]),
+            net_result_bb=Decimal(row["net_result_bb"]),
+            accounting_balanced=bool(row["accounting_balanced"]),
         )

@@ -38,7 +38,7 @@ class PokerStarsCashParserTest(unittest.TestCase):
         self.assertEqual(hand.big_blind, Decimal("0.10"))
         self.assertEqual(hand.currency, "USD")
         self.assertEqual(hand.board, ("2c", "7d", "Ts", "As"))
-        self.assertEqual(hand.total_pot, Decimal("1.32"))
+        self.assertEqual(hand.total_pot, Decimal("1.26"))
         self.assertEqual(hand.rake, Decimal("0.03"))
 
     def test_marks_hero_and_hole_cards(self) -> None:
@@ -70,6 +70,7 @@ class PokerStarsCashParserTest(unittest.TestCase):
         )
         self.assertEqual(turn_bet.amount, Decimal("0.75"))
         self.assertEqual(hand.actions[-1].action_type, ActionType.COLLECT)
+        self.assertEqual(hand.actions[-1].amount, Decimal("1.23"))
 
     def test_registry_rejects_unknown_format(self) -> None:
         with self.assertRaises(HandHistoryParseError):

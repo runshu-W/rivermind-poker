@@ -25,7 +25,9 @@ RiverMind 是一个以 **H2N-lite 牌谱分析作为入口、GTO 策略系统作
 - 确定性 VPIP、PFR、RFI、3Bet、Call Open、Cold Call、Fold to 3Bet、Flop CBet 与 Fold to Flop CBet；
 - 位置、起始/有效筹码 BB 标准化，以及可索引的玩家–手牌统计宽表；
 - 按赛制、位置、有效筹码过滤的 Python API 和 CLI；
-- 25 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
+- 逐动作筹码账本、Cash 盈亏、MTT 筹码变化和 Session 聚合；
+- 相关手牌分页查询、结构化回放，以及可直接打开的本地分析页；
+- 36 项自动化测试、黄金集清单和可重复的批量导入基准脚本；
 - Beta 范围与架构文档。
 
 ## 快速开始
@@ -38,6 +40,14 @@ python -m rivermind_core import tests/fixtures --database data/dev.db
 
 # 默认统计牌谱中标记的 Hero；也可使用 --player 指定玩家
 python -m rivermind_core stats --database data/dev.db
+
+# Session、相关手牌和结构化回放
+python -m rivermind_core sessions --database data/dev.db
+python -m rivermind_core hands --database data/dev.db --metric flop_cbet --occurred
+python -m rivermind_core replay pokerstars 100000000001 --database data/dev.db --json
+
+# 生成第一个本地分析页面
+python -m rivermind_core report --database data/dev.db --output data/report.html
 
 # 示例：只看 40–80bb 的 UTG/HJ MTT
 python -m rivermind_core stats --database data/dev.db --game-type tournament `
@@ -74,7 +84,7 @@ docs/                    产品、架构与决策文档
 PROJECT_PLAN.md          完整项目计划
 ```
 
-导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)。
+导入管道的状态约定、存储结构和当前限制见 [docs/IMPORT_PIPELINE.md](docs/IMPORT_PIPELINE.md)，统计口径见 [docs/STATS_ENGINE.md](docs/STATS_ENGINE.md)，结算、Session、手牌查询和回放见 [docs/ACCOUNTING_REPORTS.md](docs/ACCOUNTING_REPORTS.md)。
 
 ## 产品边界
 

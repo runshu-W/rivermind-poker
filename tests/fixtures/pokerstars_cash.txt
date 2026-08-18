@@ -17,10 +17,9 @@ Villain: checks
 Hero: bets $0.75
 Villain: folds
 Uncalled bet ($0.75) returned to Hero
-Hero collected $1.29 from pot
+Hero collected $1.23 from pot
 *** SUMMARY ***
-Total pot $1.32 | Rake $0.03
+Total pot $1.26 | Rake $0.03
 Board [2c 7d Ts As]
 Seat 1: Villain folded on the Turn
-Seat 3: Hero (button) (small blind) collected ($1.29)
-
+Seat 3: Hero (button) (small blind) collected ($1.23)
