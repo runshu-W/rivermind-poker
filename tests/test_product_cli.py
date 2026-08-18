@@ -96,6 +96,17 @@ class ProductCliTest(unittest.TestCase):
         self.assertEqual(payload["cards"], [])
         self.assertTrue(payload["scope"]["heroes_only"])
 
+    def test_coach_cli_exposes_deidentified_evidence_protocol(self) -> None:
+        payload = self._json_command("coach", "--json")
+
+        self.assertEqual(
+            payload["protocol"]["evidence_schema"],
+            "explanation-evidence/1.0.0",
+        )
+        self.assertEqual(payload["summary"], {"explanations": 0, "fallbacks": 0})
+        self.assertEqual(payload["items"], [])
+        self.assertTrue(payload["scope"]["heroes_only"])
+
     def test_report_cli_generates_escaped_local_analysis_page(self) -> None:
         output = self.root / "analysis.html"
         stdout = io.StringIO()
@@ -119,6 +130,7 @@ class ProductCliTest(unittest.TestCase):
         self.assertIn("Hero", html)
         self.assertIn("Leak Cards", html)
         self.assertIn("样本不足", html)
+        self.assertIn("AI 教练默认使用确定性模板", html)
         self.assertIn("核心统计", html)
 
     def _json_command(self, command: str, *arguments: str):

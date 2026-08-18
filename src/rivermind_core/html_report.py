@@ -5,6 +5,11 @@ from decimal import Decimal
 from html import escape
 from typing import Sequence
 
+from rivermind_core.coach import (
+    CoachExplanation,
+    CoachReport,
+    CoachSource,
+)
 from rivermind_core.leaks import LeakCard, LeakDirection, LeakReport, LeakSeverity
 from rivermind_core.reports import PlayerHandReport
 from rivermind_core.sessions import SessionSummary
@@ -30,6 +35,7 @@ def render_analysis_page(
     recent_hands: Sequence[PlayerHandReport],
     *,
     leak_report: LeakReport | None = None,
+    coach_report: CoachReport | None = None,
     title: str = "RiverMind Poker Analysis",
 ) -> str:
     total_hands = sum(item.hands for item in stats)
@@ -39,7 +45,7 @@ def render_analysis_page(
     stats_rows = "".join(_stats_row(item) for item in stats)
     session_rows = "".join(_session_row(item) for item in sessions)
     hand_rows = "".join(_hand_row(item) for item in recent_hands)
-    leak_section = _leak_section(leak_report)
+    leak_section = _leak_section(leak_report, coach_report)
     detected_leaks = 0 if leak_report is None else leak_report.detected_count
 
     return f"""<!doctype html>
@@ -66,6 +72,11 @@ def render_analysis_page(
     .severity {{ font-size:12px; padding:2px 8px; border-radius:999px; background:#1d2942; color:var(--blue); white-space:nowrap; }}
     .severity.priority {{ background:#3b202b; color:var(--red); }}
     .review-prompt {{ margin:12px 0; padding:10px 12px; background:#0f1628; border-radius:8px; }}
+    .coach-box {{ margin-top:14px; padding:13px; background:#10182a; border:1px solid #263b61; border-radius:10px; }}
+    .coach-head {{ display:flex; justify-content:space-between; gap:10px; color:var(--blue); font-weight:700; }}
+    .coach-source {{ color:var(--muted); font-size:11px; font-weight:400; }}
+    .coach-box h3 {{ margin:10px 0 6px; font-size:15px; }} .coach-box p {{ margin:7px 0; }}
+    .coach-plan {{ margin:8px 0; padding-left:22px; }} .boundary {{ color:var(--muted); font-size:12px; }}
     details {{ margin-top:10px; }} summary {{ cursor:pointer; color:var(--blue); }}
     .evidence {{ margin:8px 0 0; padding-left:20px; color:var(--muted); }}
     .empty {{ background:var(--panel); border:1px dashed var(--line); border-radius:12px; padding:18px; color:var(--muted); }}
@@ -99,7 +110,7 @@ def render_analysis_page(
   <h2>最近手牌</h2>
   <div class="table-wrap"><table><thead><tr><th>玩家</th><th>时间 / 手牌</th><th>类型</th><th>位置</th><th>有效筹码</th><th>结果</th><th>BB</th></tr></thead>
   <tbody>{hand_rows or '<tr><td colspan="7">暂无数据</td></tr>'}</tbody></table></div>
-  <footer>所有数值由确定性代码从规范化牌谱计算。Leak Cards 是带样本门槛的复盘筛选信号，不代表 GTO 定论。MTT 结果单位为筹码，不代表奖金或 ROI。此页面不包含实时行动建议。</footer>
+  <footer>所有数值由确定性代码从规范化牌谱计算。AI 教练默认使用确定性模板；候选模型文本只有通过证据哈希、字段引用、数值和隐私校验后才能展示。Leak Cards 不代表 GTO 定论。MTT 结果单位为筹码，不代表奖金或 ROI。此页面不包含实时行动建议。</footer>
 </main></body></html>"""
 
 
@@ -135,7 +146,10 @@ def _hand_row(report: PlayerHandReport) -> str:
     )
 
 
-def _leak_section(report: LeakReport | None) -> str:
+def _leak_section(
+    report: LeakReport | None,
+    coach_report: CoachReport | None,
+) -> str:
     if report is None:
         return '<div class="empty">本次报告未执行漏洞评估。</div>'
     if not report.cards:
@@ -144,7 +158,19 @@ def _leak_section(report: LeakReport | None) -> str:
             f"已通过 {report.clear_count} 项，另有 {report.insufficient_sample_count} 项样本不足。"
             f"规则配置：{escape(report.profile_id)} v{escape(report.profile_version)}。</div>"
         )
-    cards = "".join(_leak_card(card) for card in report.cards)
+    coach_by_key = {
+        (item.explanation.player_name, item.explanation.rule_id): item.explanation
+        for item in (() if coach_report is None else coach_report.items)
+    }
+    cards = "".join(
+        _leak_card(
+            card,
+            coach_by_key.get(
+                (card.assessment.player_name, card.assessment.rule_id)
+            ),
+        )
+        for card in report.cards
+    )
     return (
         f'<div class="muted" style="margin-bottom:10px">规则配置：{escape(report.profile_id)} '
         f"v{escape(report.profile_version)}；仅在 95% Wilson 区间整体越过阈值时触发。</div>"
@@ -152,7 +178,10 @@ def _leak_section(report: LeakReport | None) -> str:
     )
 
 
-def _leak_card(card: LeakCard) -> str:
+def _leak_card(
+    card: LeakCard,
+    explanation: CoachExplanation | None,
+) -> str:
     item = card.assessment
     assert item.severity is not None
     assert item.observed_percentage is not None
@@ -168,6 +197,13 @@ def _leak_card(card: LeakCard) -> str:
     evidence = "".join(_leak_evidence_hand(hand) for hand in card.evidence_hands)
     if not evidence:
         evidence = "<li>当前筛选范围内没有可展示的证据手牌。</li>"
+    coach = "" if explanation is None else _coach_explanation(explanation)
+    rule_context = (
+        f'<p>{escape(item.rationale)}</p>'
+        f'<div class="review-prompt">{escape(item.review_prompt)}</div>'
+        if explanation is None
+        else ""
+    )
     return (
         f'<article class="leak-card {severity_class}">'
         '<div class="leak-head"><div>'
@@ -177,10 +213,33 @@ def _leak_card(card: LeakCard) -> str:
         f'<div class="leak-metric">{observed}</div>'
         f'<div class="muted">{item.occurrences}/{item.opportunities} · {interval} · '
         f"复盘阈值 {direction}{item.trigger_percentage:g}%</div>"
-        f'<p>{escape(item.rationale)}</p>'
-        f'<div class="review-prompt">{escape(item.review_prompt)}</div>'
+        f"{rule_context}"
+        f"{coach}"
         f'<details><summary>查看证据手牌（{len(card.evidence_hands)}）</summary>'
         f'<ul class="evidence">{evidence}</ul></details></article>'
+    )
+
+
+def _coach_explanation(explanation: CoachExplanation) -> str:
+    source_labels = {
+        CoachSource.TEMPLATE: "确定性模板",
+        CoachSource.LLM_VALIDATED: "已校验模型草稿",
+        CoachSource.TEMPLATE_FALLBACK: "校验失败·模板回退",
+    }
+    plan = "".join(
+        f"<li>{escape(step)}</li>" for step in explanation.review_plan
+    )
+    return (
+        '<section class="coach-box">'
+        '<div class="coach-head"><span>AI 教练</span>'
+        f'<span class="coach-source">{source_labels[explanation.source]} · '
+        f"证据 {escape(explanation.evidence_hash[:12])}</span></div>"
+        f"<h3>{escape(explanation.headline)}</h3>"
+        f"<p>{escape(explanation.observation)}</p>"
+        f"<p>{escape(explanation.teaching_point)}</p>"
+        f'<ol class="coach-plan">{plan}</ol>'
+        f'<p class="boundary">边界：{escape(explanation.uncertainty)}</p>'
+        "</section>"
     )
 
 

@@ -8,6 +8,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Sequence
 
+from rivermind_core.coach import (
+    CoachReport,
+    coach_report_to_dict,
+    explain_leak_report,
+)
 from rivermind_core.html_report import render_analysis_page
 from rivermind_core.importer import HandHistoryImporter, ImportBatchReport
 from rivermind_core.leaks import LeakAssessment, LeakReport, LeakStatus
@@ -50,6 +55,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_dimension_arguments(leaks_parser)
     leaks_parser.add_argument("--evidence-limit", type=int, default=5)
     leaks_parser.add_argument("--json", action="store_true")
+
+    coach_parser = subparsers.add_parser(
+        "coach", help="Generate evidence-bound Chinese coaching explanations"
+    )
+    _add_database_argument(coach_parser)
+    _add_scope_arguments(coach_parser)
+    _add_dimension_arguments(coach_parser)
+    coach_parser.add_argument("--evidence-limit", type=int, default=5)
+    coach_parser.add_argument("--json", action="store_true")
 
     sessions_parser = subparsers.add_parser(
         "sessions", help="Summarize cash sessions and tournaments"
@@ -109,6 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "import": _run_import,
         "stats": _run_stats,
         "leaks": _run_leaks,
+        "coach": _run_coach,
         "sessions": _run_sessions,
         "hands": _run_hands,
         "replay": _run_replay,
@@ -186,6 +201,33 @@ def _run_leaks(args: argparse.Namespace) -> int:
         print(json.dumps(payload, ensure_ascii=False))
     else:
         _print_leaks(report)
+    return 0
+
+
+def _run_coach(args: argparse.Namespace) -> int:
+    if not _database_exists(args.database):
+        return 2
+    try:
+        stat_filter = _stats_filter(args)
+        if not 1 <= args.evidence_limit <= 20:
+            raise ValueError("evidence-limit must be between 1 and 20")
+    except ValueError as exc:
+        return _print_value_error(exc)
+    player_name, heroes_only = _scope(args)
+    with SQLiteHandStore(args.database) as store:
+        leak_report = store.query_leaks(
+            player_name=player_name,
+            heroes_only=heroes_only,
+            stat_filter=stat_filter,
+            evidence_limit=args.evidence_limit,
+        )
+    report = explain_leak_report(leak_report)
+    if args.json:
+        payload = coach_report_to_dict(report)
+        payload["scope"] = _scope_dict(args)
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        _print_coach(report)
     return 0
 
 
@@ -290,6 +332,7 @@ def _run_report(args: argparse.Namespace) -> int:
             stat_filter=stat_filter,
             evidence_limit=args.evidence_limit,
         )
+        coach_report = explain_leak_report(leak_report)
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -298,6 +341,7 @@ def _run_report(args: argparse.Namespace) -> int:
             sessions,
             recent_hands,
             leak_report=leak_report,
+            coach_report=coach_report,
             title=args.title,
         ),
         encoding="utf-8",
@@ -683,6 +727,23 @@ def _print_leaks(report: LeakReport) -> None:
             f"[{item.severity.value}] {item.player_name} · {item.title}: "
             f"{item.observed_percentage:.1f}% ({item.occurrences}/{item.opportunities}), "
             f"95% CI {interval}; evidence: {evidence or 'none'}"
+        )
+
+
+def _print_coach(report: CoachReport) -> None:
+    if not report.items:
+        print("No qualified review signals found")
+        return
+    for item in report.items:
+        explanation = item.explanation
+        print(f"{explanation.player_name} · {explanation.headline}")
+        print(explanation.observation)
+        print(explanation.teaching_point)
+        for index, step in enumerate(explanation.review_plan, start=1):
+            print(f"  {index}. {step}")
+        print(f"Boundary: {explanation.uncertainty}")
+        print(
+            f"Source: {explanation.source.value} · evidence {explanation.evidence_hash[:12]}"
         )
 
 

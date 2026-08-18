@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
 
 from rivermind_core.importer import HandHistoryImporter  # noqa: E402
+from rivermind_core.coach import explain_leak_report  # noqa: E402
 from rivermind_core.parsers import default_registry  # noqa: E402
 from rivermind_core.reports import HandQuery, StatMetric  # noqa: E402
 from rivermind_core.storage import SQLiteHandStore  # noqa: E402
@@ -61,6 +62,9 @@ def main() -> int:
             leaks_started = time.perf_counter()
             leaks = store.query_leaks(heroes_only=True)
             leaks_elapsed = time.perf_counter() - leaks_started
+            coach_started = time.perf_counter()
+            coach = explain_leak_report(leaks)
+            coach_elapsed = time.perf_counter() - coach_started
         if not stats or stats[0].hands != args.hands:
             raise RuntimeError("Stats benchmark did not observe every imported hand")
         if not sessions or sessions[0].hands != args.hands:
@@ -69,6 +73,8 @@ def main() -> int:
             raise RuntimeError("Related-hand benchmark returned the wrong page size")
         if args.hands >= 30 and not leaks.cards:
             raise RuntimeError("Leak benchmark did not produce the expected review signal")
+        if coach.explanation_count != len(leaks.cards):
+            raise RuntimeError("Coach benchmark did not explain every leak card")
         result = {
             "hands": args.hands,
             "imported": report.imported,
@@ -79,6 +85,7 @@ def main() -> int:
             "sessions_elapsed_seconds": round(sessions_elapsed, 3),
             "related_1000_elapsed_seconds": round(related_elapsed, 3),
             "leaks_elapsed_seconds": round(leaks_elapsed, 3),
+            "coach_templates_elapsed_seconds": round(coach_elapsed, 3),
             "database_mb": round(database.stat().st_size / 1024 / 1024, 2),
             "fixture": "synthetic variants of the committed golden hand",
         }

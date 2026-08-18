@@ -38,9 +38,9 @@ flowchart LR
 | Stats Engine | 固定核心指标和机会分母 | 9 项翻前/Flop 指标 v0.2 |
 | Accounting | 逐动作投入、返还、收池、净结果与守恒校验 | v0.1 已实现 |
 | Reports | Session、相关手牌分页、结构化回放 | API/CLI v0.1 |
-| Analysis Page | Leak Cards、核心统计、Session、最近手牌 | 本地 HTML v0.2 |
+| Analysis Page | Leak Cards、AI 教练、核心统计、Session、最近手牌 | 本地 HTML v0.3 |
 | Leak Engine | 版本化规则、样本门槛、Wilson 区间与证据手牌 | v0.1 已实现 |
-| AI Coach | 证据约束解释 | 待实现 |
+| AI Coach | 脱敏证据、中文模板、候选输出校验与回退 | v0.1 已实现；外部 LLM 待接入 |
 | GTO Matcher | 映射到验证解法 | Beta 可选 |
 
 ## 当前存储边界
